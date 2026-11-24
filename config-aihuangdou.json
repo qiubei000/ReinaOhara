@@ -1,1 +1,1 @@
-{"spider": "https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/aihuangdou.py", "sites": [{"key": "aihuangdou", "name": "黄桃短剧", "type": 3, "api": "aihuangdou", "searchable": 1, "quickSearch": 1}]}
+{"spider": "", "sites": [{"key": "py_aihuangdou", "name": "黄桃短剧", "type": 3, "api": "py_aihuangdou", "ext": "https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/aihuangdou.py", "searchable": 1, "quickSearch": 1, "filterable": 1}]}
