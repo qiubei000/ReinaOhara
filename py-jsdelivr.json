@@ -1,0 +1,55 @@
+{
+  "spider": "",
+  "sites": [
+    {
+      "key": "py_8se18",
+      "name": "蝴蝶影视",
+      "type": 3,
+      "api": "py_8se18",
+      "ext": "https://cdn.jsdelivr.net/gh/qiubei000/ReinaOhara@main/8se18.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "py_aihuangdou",
+      "name": "黄桃短剧",
+      "type": 3,
+      "api": "py_aihuangdou",
+      "ext": "https://cdn.jsdelivr.net/gh/qiubei000/ReinaOhara@main/aihuangdou.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "py_u5book",
+      "name": "尤物百科",
+      "type": 3,
+      "api": "py_u5book",
+      "ext": "https://cdn.jsdelivr.net/gh/qiubei000/ReinaOhara@main/u5book.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "py_HStream",
+      "name": "HStream",
+      "type": 3,
+      "api": "py_HStream",
+      "ext": "https://cdn.jsdelivr.net/gh/qiubei000/ReinaOhara@main/HStream.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "py_sannian",
+      "name": "三年高考五年模拟",
+      "type": 3,
+      "api": "py_sannian",
+      "ext": "https://cdn.jsdelivr.net/gh/qiubei000/ReinaOhara@main/sannian.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    }
+  ]
+}
