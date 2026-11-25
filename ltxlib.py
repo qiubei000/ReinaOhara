@@ -48,8 +48,8 @@ except Exception:
 
 BASE = "https://ltxlib.dpdns.org"
 HOST = "ltxlib.dpdns.org"
-UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-COOKIE = "ltx_c=fddb98afd289fef7adcab5b1d05687a1; cf_clearance=CuzpTHZK6_6MOC5HZT3sKjQj5ebYrn3yvVpBKzwUkeRNQ8YEnSFdt_yhg2C2oxrnxWjw7o-qut9cYquxC1U4-G6lPNz3QOaChrnnn54N5O9RZ9SooCPN6UV5-_yWzL2f_K-_cs1OGgBXSxvz0jv8JTLPOjzlN1mhvH_zmFxebMbZcEodUS2qw6VRz6C4JT3DOniTh7-PXkZqcQfL25NxpaV4O_n9q67ebNtewhy4w-MyVw9yajwnYaIiM6rgTcT38auGL21Y7krtBE0thhGO-UA3iudIsPfEANX_kg9Z0kELUQhSlv7XU2WF3kcYDD7Kg4hDLz5c1fseHhsX--a0Ulnx-QvtVRz86S1JZjaNceIz8ufGnsfrlSeprNlSSrlS1BRoulr3-UFbohWQLkWyEFtkDRXCtkAcP3x9mMckocXTb8inbXxK; ltx_pass=d58c2b3314c117d317298fb3.1796191059900.5XI5HmDv0bsBuH58CZ71OOU78p5jeTScHVFvO813oIk"
+UA = UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
 PAGE_SIZE = 60
 
 VERIFY_MSG = (
