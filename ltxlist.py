@@ -7,6 +7,9 @@ LTX 磁力表（FongMi / TVBox Py 源）——把 LTX 资源库的 CSV 表做成
   截图 / 字幕 / 入库 / 状态 / javdb
 做法：这个 py 文件本身不带数据，第一次打开时去 GitHub 上下载 ltx.csv，
   下载一次后缓存在内存里，之后翻页和搜索都不用再下载。
+分类：全部 / 磁力 / ed2k / 女优 / 厂牌。
+  女优 1097 位、厂牌 208 家，都按作品数从多到少排，一页 20 个，
+  点进一个女优或厂牌，会列出她的作品（最多前 100 部），点一部就去取链接。
 
 实话：
 - 表里 4146 条，磁力只有 215 条，剩下 3931 条是 ed2k。
@@ -20,6 +23,7 @@ DATA_URL = "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/Rei
 
 import csv
 import io
+from urllib.parse import quote, unquote
 
 try:
     import requests
@@ -36,6 +40,8 @@ except Exception:
 class Spider(_BaseSpider):
     _ROWS = None      # 缓存：下载过的整张表
     _FAILED = False   # 缓存：下载失败过就不再反复试
+    _ACTRESSES = None  # 缓存：女优索引（名字、部数、第一部封面）
+    _MAKERS = None    # 缓存：厂牌索引（名字、部数、第一部封面）
 
     def __init__(self):
         self.page_size = 20
@@ -128,6 +134,65 @@ class Spider(_BaseSpider):
             "vod_remarks": remarks,
         }
 
+    def _actress_index(self):
+        """女优索引：按作品数从多到少排。女优栏里多个名字用 / 分开，要拆开算。
+        每项是（名字，部数，第一部作品的封面）。"""
+        if Spider._ACTRESSES is not None:
+            return Spider._ACTRESSES
+        rows = self._load()
+        counts = {}
+        first_cover = {}
+        for i, r in enumerate(rows):
+            for name in (r["actress"] or "").split("/"):
+                name = name.strip()
+                if not name:
+                    continue
+                counts[name] = counts.get(name, 0) + 1
+                if name not in first_cover:
+                    first_cover[name] = r["cover"]
+        Spider._ACTRESSES = [(name, c, first_cover[name])
+                             for name, c in sorted(counts.items(), key=lambda kv: -kv[1])]
+        return Spider._ACTRESSES
+
+    def _maker_index(self):
+        """厂牌索引：按作品数从多到少排。每项是（名字，部数，第一部作品的封面）。"""
+        if Spider._MAKERS is not None:
+            return Spider._MAKERS
+        rows = self._load()
+        counts = {}
+        first_cover = {}
+        for i, r in enumerate(rows):
+            name = (r["maker"] or "").strip()
+            if not name:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            if name not in first_cover:
+                first_cover[name] = r["cover"]
+        Spider._MAKERS = [(name, c, first_cover[name])
+                          for name, c in sorted(counts.items(), key=lambda kv: -kv[1])]
+        return Spider._MAKERS
+
+    def _index_page(self, index, kind, pg):
+        """女优 / 厂牌索引的分页：一页 20 个，封面用她的第一部作品的封面。"""
+        pg = max(int(pg), 1)
+        start = (pg - 1) * self.page_size
+        chunk = index[start:start + self.page_size]
+        items = []
+        for name, count, cover in chunk:
+            items.append({
+                "vod_id": kind + ":" + quote(name, safe=""),
+                "vod_name": name,
+                "vod_pic": cover,
+                "vod_remarks": "{} 部".format(count),
+            })
+        return {
+            "list": items,
+            "page": pg,
+            "pagecount": (len(index) + self.page_size - 1) // self.page_size,
+            "limit": self.page_size,
+            "total": len(index),
+        }
+
     def _page(self, pairs, pg):
         pg = max(int(pg), 1)
         start = (pg - 1) * self.page_size
@@ -150,6 +215,8 @@ class Spider(_BaseSpider):
                 {"type_id": "all", "type_name": "全部 {} 条".format(len(rows))},
                 {"type_id": "magnet", "type_name": "磁力 {} 条".format(n_mag)},
                 {"type_id": "ed2k", "type_name": "ed2k {} 条".format(n_ed2k)},
+                {"type_id": "actress", "type_name": "女优 {} 位".format(len(self._actress_index()))},
+                {"type_id": "maker", "type_name": "厂牌 {} 家".format(len(self._maker_index()))},
             ],
             "filters": {},
         }
@@ -161,7 +228,13 @@ class Spider(_BaseSpider):
         return {"list": [self._vod(i, r) for i, r in enumerate(rows[:20])]}
 
     def categoryContent(self, tid, pg, filter=None, extend=None):
-        pairs = self._filtered((tid or "all").strip("/"))
+        tid = (tid or "all").strip("/")
+        # 女优 / 厂牌索引：按作品数排，一页 20 个
+        if tid == "actress":
+            return self._index_page(self._actress_index(), "actress", pg)
+        if tid == "maker":
+            return self._index_page(self._maker_index(), "maker", pg)
+        pairs = self._filtered(tid)
         if not pairs and not self._load():
             return {"list": [], "msg": "磁力表还没加载到，检查网络后下拉刷新再试"}
         return self._page(pairs, pg)
@@ -178,7 +251,37 @@ class Spider(_BaseSpider):
         return self._page(pairs, pg)
 
     def detailContent(self, ids):
-        idx = int(ids[0]) if isinstance(ids, list) else int(ids)
+        code = ids[0] if isinstance(ids, list) else str(ids)
+        # 女优 / 厂牌详情：列出她（它）的作品，点一部就去取那部的链接
+        if code.startswith("actress:") or code.startswith("maker:"):
+            kind, name = code.split(":", 1)
+            name = unquote(name)
+            rows = self._load()
+            if kind == "actress":
+                label = "女优"
+                pairs = [(i, r) for i, r in enumerate(rows)
+                         if name in [n.strip() for n in (r["actress"] or "").split("/")]]
+            else:
+                label = "厂牌"
+                pairs = [(i, r) for i, r in enumerate(rows)
+                         if (r["maker"] or "").strip() == name]
+            total = len(pairs)
+            shown = pairs[:100]
+            play_url = "#".join(
+                "{}${}".format(self._vod(i, r)["vod_name"], "video:" + str(i))
+                for i, r in shown)
+            vod = {
+                "vod_id": code,
+                "vod_name": "{}：{}".format(label, name),
+                "vod_pic": shown[0][1]["cover"] if shown else "",
+                "vod_content": "{}：{}\n共 {} 部作品，这里列出前 {} 部，点一部就会去取它的链接。".format(
+                    label, name, total, len(shown)),
+                "vod_remarks": "共 {} 部".format(total),
+                "vod_play_from": "作品" if shown else "",
+                "vod_play_url": play_url,
+            }
+            return {"list": [vod]}
+        idx = int(code)
         rows = self._load()
         if idx < 0 or idx >= len(rows):
             return {"list": []}
@@ -245,6 +348,14 @@ class Spider(_BaseSpider):
         return {"list": [vod]}
 
     def playerContent(self, flag, id, vipFlags=None):
+        # 女优 / 厂牌里的作品：点开时按行号取那部的链接
+        if isinstance(id, str) and id.startswith("video:"):
+            try:
+                idx = int(id.split(":", 1)[1])
+                rows = self._load()
+                return {"parse": 0, "url": rows[idx]["link"], "header": {}}
+            except Exception:
+                return {"parse": 0, "url": "", "header": {}}
         # 截图源：pics:// 开头的图串，直接交给播放器翻图
         if isinstance(id, str) and id.startswith("pics://"):
             return {"parse": 0, "url": id, "header": {}}
