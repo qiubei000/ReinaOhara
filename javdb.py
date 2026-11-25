@@ -55,7 +55,7 @@ JavDB TVBox Py 源（浏览 / 搜索 / 详情）v3 —— 2026-11-25 按实测�
 
 # 填你自己的登录 Cookie，例如 "over18=1; _jdb_session=...; ..."
 # 留空 = 匿名访问，只能看公开区。
-COOKIE = ""
+COOKIE = "list_mode=v; theme=auto; locale=zh; over18=1; _ym_uid=179336072268424606; _ym_d=1793360722; hide_app_banner_v2=1; _ym_isad=2; _rucaptcha_session_id=c1c83b5e8913e7ce8eed1bc87e288f9e; cf_clearance=Cna6P_vXe82LhTiajL1cfmvvIDIIO2_Tcc856xbKUlpqpSob4AAhmmYG_LK4xWHUDA10flHD1C05EiKb4q7PTqQ-x8spwxIZsJUNzeiEFxATeizmwgZMT0aPxSj08bs1gxyIYEYUpuBfcBcqHn9rvUGxR0PgWh9T_S0HVKw1_8T2IZfVfBBmzjMSR2ro4gxTyEEW6qreh2lGND9vKJ3_SHtL0ICn7ASBC9jjonyZo8ob-WQ0uOiveHW4Q3f3pdTi-gvU_5tIjYNogrlPryvi44R6N7WHaMtRa5RfkMfBzgAchbUJqfGLCOzzZUWVT_JCcdlpzPKtjCGd2XISdSEOqCHVCKD35qexNpRSTLFL1w; _jdb_session=fNGLob0SCgQX9kaslvMpSP1EVdT%2BQRD8jO5%2ForXyFENluBjmttm5QYYnFkRKXmf2Rq2M7cF8V1Th18OEcLqViJgv6bCdI6tLYwqmQC7iqEAZaqGRpHmlIJctdZCYPo5uSygWFj68sEKmWfOYhbU115qWwsgEp6RZ2777XxBt5UJCbIPo56Iael00hSsyzL54qyIDGcEaJUxzdlDnppMAOsEHxQTYcpGG9AAkDvnBWDcgtwSbMliQyd6QaVRqsR%2F8spAxfHSmA38CCwF3a%2Bhghta9ioUVy8U517nfOsZzGenon2xr2MmDAWu9LI7uhGccNNMN77N6hAnGOfwNfX%2FIzF2zxxqqqapAK7nsNtdyuWQkHBHPJJc9RgFeZA6tIA%3D%3D--Sg2JB4eT65oxS4DZ--0EE1qavYg9MMDhURuuXLtA%3D%3D"
 
 import html as _html
 import re
