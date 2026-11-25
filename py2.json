@@ -191,14 +191,13 @@
       "filterable": 1
     },
     {
-      "key": "ltxlib.py",
-      "name": "LTX资源库",
+      "key": "javdb.py",
+      "name": "JavDB",
       "type": 3,
-      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/ltxlib.py",
+      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/javdb.py",
       "searchable": 1,
       "quickSearch": 1,
-      "filterable": 1,
-      "ext": ""
+      "filterable": 1
     }
   ]
 }
