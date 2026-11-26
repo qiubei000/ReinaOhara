@@ -329,6 +329,7 @@ class Spider(BaseSpider):
         self._snap_key = ""
         self._index = None  # {"actors": [...], "makers": [...]}，扫库一次后本会话内缓存
         self._diag = ""  # 诊断用：最近一次失败卡在哪一步，失败时当成一条显示出来
+        self._diag_detail = ""  # 诊断详情：点开诊断卡片能看到完整说明
         cfg = {}
         if isinstance(extend, dict):
             cfg = extend
@@ -433,12 +434,21 @@ class Spider(BaseSpider):
                 except Exception:
                     data = {}
                 if isinstance(data, dict) and data.get("reason") in ("verify", "origin"):
-                    self._diag = "数据接口 403 verify（票据无效/过期）"
+                    self._diag = "数据接口403verify"
+                    self._diag_detail = ("数据接口返回 403，reason=verify："
+                                         "票据无效或过期，请重新验证后换新票据。")
                     raise _VerifyNeeded()
-                self._diag = "数据接口 403"
+                snippet = raw[:120].decode("utf-8", "replace").strip()
+                self._diag = "数据接口403"
+                self._diag_detail = ("数据接口返回 403，返回内容前120字：%s"
+                                     % (snippet or "（空）"))
                 raise _Blocked()
             if "application/vnd.ltx.encrypted+json" not in (ct or ""):
-                self._diag = "数据接口返回非加密内容（%s）" % status
+                snippet = raw[:120].decode("utf-8", "replace").strip()
+                self._diag = "数据接口非加密%d" % status
+                self._diag_detail = ("数据接口返回 %s，Content-Type=%s，"
+                                     "内容前120字：%s"
+                                     % (status, ct, snippet or "（空）"))
                 if status != 200:
                     raise _Blocked()
                 raise _Blocked()
@@ -468,7 +478,9 @@ class Spider(BaseSpider):
             try:
                 plain = _aes_gcm_decrypt(sess["key"], iv, _b64u_decode(env.get("body") or ""), aad)
             except Exception:
-                self._diag = "解密失败（密钥或 AAD 不对）"
+                self._diag = "解密失败"
+                self._diag_detail = ("解密失败：密钥或 AAD 与服务器不一致，"
+                                     "可能是站点改了加密协议。")
                 raise _Blocked()
             if encoding == "gzip":
                 try:
@@ -683,9 +695,9 @@ class Spider(BaseSpider):
         return q
 
     def _diag_item(self, text):
-        # 诊断用：失败时把原因当成一条显示在列表里，方便截图定位
+        # 诊断用：失败时把原因当成一条显示在列表里，点开能看到完整说明
         return {"vod_id": "diag", "vod_name": "【诊断】" + text,
-                "vod_pic": "", "vod_remarks": "截图发我",
+                "vod_pic": "", "vod_remarks": "点开看详情",
                 "vod_content": text}
 
     def homeVideoContent(self):
@@ -767,6 +779,13 @@ class Spider(BaseSpider):
         else:
             code = str(ids or "").strip()
         code = code.split("@@")[0]
+        # 点开诊断卡片：显示完整诊断说明
+        if code == "diag":
+            detail = (getattr(self, "_diag_detail", "") or self._diag
+                      or "暂无诊断信息")
+            return {"list": [{"vod_id": "diag", "vod_name": "诊断结果",
+                              "vod_pic": "", "vod_remarks": "",
+                              "vod_content": detail + "\n\n把这页截给我。"}]}
         # 女优/厂牌卡片：点开是该女优/厂牌的作品列表（每集一部作品）
         if code.startswith("actor:") or code.startswith("maker:"):
             name = code.split(":", 1)[1]
