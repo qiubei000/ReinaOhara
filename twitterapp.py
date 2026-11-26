@@ -584,8 +584,11 @@ class Spider(BaseSpider):
                 base = (self.getProxyUrl() or '').strip()
         except Exception:
             base = ''
+        if not base:
+            # 壳未提供代理地址：有直链就直接回直链（封面图），否则返回空串
+            return params.get('u') or ''
         if 'do=py' not in base:
-            base = 'http://127.0.0.1:9978/proxy?do=py'
+            base = base.rstrip('/') + '/proxy?do=py'
         elif '/proxy' not in base:
             base = base.replace('?do=py', '/proxy?do=py')
         params.setdefault('key', self.getName())

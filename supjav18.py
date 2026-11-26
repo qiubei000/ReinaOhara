@@ -33,7 +33,6 @@ HLS_MIME = "application/vnd.apple.mpegurl"
 BLOCK_MSG = "站点触发 Cloudflare 验证，请在源设置 extend 中填入该站点的浏览器 Cookie（cf_clearance）与签发 UA，或切换站点域名"
 FALLBACK_MSG = "com 被 Cloudflare 拦截，当前显示 blog 镜像内容；票据生效后将自动切回 com 主站"
 DEFAULT_MODE = "mix"
-DEFAULT_TICKETS = {"supjav.com": {"cookie": "cf_clearance=Co9JfcVBfvXamb9nGbltop_Pv5pYHXwGVVwYVqEa4zcq_3XjSnhVRkvfsLUdwmK-HgkZhlH9ARkiBZnXlG1wkf6RtMKggWTP2gODADkU0nimbCLqdtr_Ol-MIl2sADWgd-rnaEQ7EgHQu7Hszy3NwBH8MwkV8ZNvkohvj77dOTMgel1-hhErR8aSsWoFUgSy_qebnc-2nNCOssRE0qBwidBjOau91bXArz75j2YY7TzHgdETQ0GyU21UcV1s-KbA4TB5yWj9O_mPEpdCGD5zRrH8lkkiRl7oEMs1f-sZpYhgSKHlTGRlE5Fe7xhn8lnMPQVGxdgA-F-8JTdi65YVktJSZXkaru7zaNPh6k3-WqNM05NgOLumdZGScBCu1yf-tVY2DFliHj5feT3__vljyvu_jg9__dxCTkEEG2IX-QGO5r3i6FEdyvRfhDrLLE6heSfBS9mvAGI1; _cfuvid=HH2wtSiupD1KYLYYVQDBLjPUZm_Ti8XimNRpo4MRBsw-1795316809.2707708-1.0.1.1-wnUWbsDelT.L2AZK_p5q4yWQW1oatKyr7CCate2UpbU", "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_1_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Mobile/15E148 Safari/604.1", "issued_at": 0}}
 
 ROUTES = [
     ("latest", "最新发布", ""),
@@ -558,8 +557,6 @@ class Spider(_BaseSpider):
         self.ua = DEFAULT_UA
         self.tickets = {}
         self.mix = False
-        for host, ticket in DEFAULT_TICKETS.items():
-            self.tickets[host] = {"cookie": ticket["cookie"], "ua": ticket["ua"], "issued_at": ticket.get("issued_at") or 0}
         self._prof = None
         cfg = {}
         if extend:

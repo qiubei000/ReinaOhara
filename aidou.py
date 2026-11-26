@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 import base64
 import json
-import threading as _th
 import time
 import urllib.parse
 import urllib.request
 import urllib.error
-from http.server import BaseHTTPRequestHandler as _BHR, ThreadingHTTPServer as _THS
 from urllib.parse import urlparse as _up, parse_qs as _pqs, quote as _quote, unquote as _unquote
 
 
@@ -238,11 +236,31 @@ def _api_md5(t):
 
 
 # ================= 封面图片代理 =================
-# 封面是字节反转过的 JPEG (站内 JS getCover 反转后显示), 原始 URL 在 OK影视里
-# 显示不出来. 蜘蛛内置一个本地 HTTP 服务, vod_pic 改成本地代理地址, 代理取回
-# 图片后反转字节, 按真实格式回正确的 Content-Type.
-_IMG = {"port": None, "server": None, "lock": _th.Lock()}
-_IMG_PORTS = (9980, 9981, 9982, 9983, 9984)
+# 封面是字节反转过的 JPEG (站内 JS getCover 反转后显示), 原始 URL 在普通
+# 播放器里显示不出来. 不再自起本地 HTTP 服务 (0.0.0.0:9980-9984 在
+# WebHomeTV 里不稳且占端口)，改走壳子的 localProxy：
+# vod_pic 写成壳子代理地址 (getProxyUrl() 返回, 如 http://127.0.0.1:9978/...)，
+# 壳子加载封面时调 localProxy(u=<b64 原图地址>)，这里取回图片后反转字节
+# 再按真实格式回正确的 Content-Type。壳子没有 localProxy 时回退原图直链。
+
+
+def _b64e(text):
+    return base64.urlsafe_b64encode(str(text).encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _b64d(token):
+    token = str(token or "").strip()
+    if not token:
+        return ""
+    try:
+        pad = (-len(token)) % 4
+        return base64.urlsafe_b64decode(token + "=" * pad).decode("utf-8", "replace")
+    except Exception:
+        try:
+            pad = (-len(token)) % 4
+            return base64.b64decode(token + "=" * pad).decode("utf-8", "replace")
+        except Exception:
+            return ""
 
 
 def _img_ct(data, url):
@@ -288,78 +306,34 @@ def _unreverse_pic(data):
     return None
 
 
-class _ImgHandler(_BHR):
-    def log_message(self, *a):
-        pass
-
-    def do_GET(self):
-        try:
-            q = _pqs(_up(self.path).query)
-            urls = q.get("url") or []
-            if not urls:
-                self.send_response(400)
-                self.end_headers()
-                return
-            raw_url = _unquote(urls[0])
-            data = _fetch_pic_bytes(raw_url)
-            rev = _unreverse_pic(data)
-            if rev is not None:
-                data = rev
-            ct = _img_ct(data, raw_url)
-            self.send_response(200)
-            self.send_header("Content-Type", ct)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "max-age=86400")
-            self.end_headers()
-            self.wfile.write(data)
-        except Exception:
-            try:
-                self.send_response(502)
-                self.end_headers()
-            except Exception:
-                pass
-
-
-def _ensure_img_server():
-    # 返回本地代理端口; 失败返回 None (调用方回退到原图 URL)
-    # 固定端口 (9980 起) 而不用随机端口; 绑定 0.0.0.0 而非仅 127.0.0.1.
-    if _IMG["port"]:
-        return _IMG["port"]
-    with _IMG["lock"]:
-        if _IMG["port"]:
-            return _IMG["port"]
-        for port in _IMG_PORTS:
-            try:
-                srv = _THS(("0.0.0.0", port), _ImgHandler)
-                t = _th.Thread(target=srv.serve_forever, daemon=True)
-                t.start()
-                _IMG["port"] = port
-                _IMG["server"] = srv
-                return port
-            except Exception:
-                continue
-        return None
-
-
-def _proxy_pic(url):
-    if not url:
-        return ""
-    port = _ensure_img_server()
-    if port:
-        return "http://127.0.0.1:%d/img?url=%s" % (port, _quote(url, safe=""))
-    return url
-
-
 class Spider:
     def __init__(self, *args):
         # opener 懒创建: __init__ 里不建, 首次联网时才建
         self.opener = None
         self._cache = {}  # vodId(str) -> row
-        # 预启动本地图片代理 (失败也不影响列表/播放, 只是封面回退到原图)
-        try:
-            _ensure_img_server()
-        except Exception:
-            pass
+
+    def _proxy_base(self):
+        # 壳子的 localProxy 地址 (如 http://127.0.0.1:9978/proxy?do=py)；
+        # 没有时返回 ""，封面回退原图直链
+        fn = getattr(self, "getProxyUrl", None)
+        if callable(fn):
+            try:
+                base = (fn() or "").strip()
+                if base:
+                    return base
+            except Exception:
+                pass
+        return ""
+
+    def _proxy_pic(self, url):
+        # 封面走壳子 localProxy：壳子加载时调 localProxy(u=<b64 原图地址>)
+        if not url:
+            return ""
+        base = self._proxy_base()
+        if not base:
+            return url
+        sep = "&" if "?" in base else "?"
+        return base + sep + "u=" + _b64e(url)
 
     def _opener(self):
         if self.opener is None:
@@ -416,7 +390,7 @@ class Spider:
         if vid:
             self._cache[vid] = row
         name = row.get("vodName") or ""
-        pic = _proxy_pic(row.get("vodPic") or "")
+        pic = self._proxy_pic(row.get("vodPic") or "")
         hits = row.get("vodHits")
         remarks = ""
         if hits is not None:
@@ -505,7 +479,7 @@ class Spider:
         vtime = ""
         if info:
             name = info.get("vodName") or ""
-            pic = _proxy_pic(info.get("vodPic") or "")
+            pic = self._proxy_pic(info.get("vodPic") or "")
             tag = info.get("vodTag") or ""
             hits = info.get("vodHits")
             code = info.get("code") or ""
@@ -513,7 +487,7 @@ class Spider:
             vtime = info.get("vodTime") or ""
         if row:
             name = name or row.get("vodName") or ""
-            pic = pic or _proxy_pic(row.get("vodPic") or "")
+            pic = pic or self._proxy_pic(row.get("vodPic") or "")
             tag = tag or row.get("vodTag") or ""
             if hits is None:
                 hits = row.get("vodHits")
@@ -599,7 +573,21 @@ class Spider:
         return True
 
     def localProxy(self, param, *args):
-        return [200, "video/MP2T", None, ""]
+        # 壳子取封面：param 为壳子解析代理地址 query 得到的参数 dict，
+        # u=<b64 原图地址>；取回图片后反转字节，回真图 + 正确 Content-Type
+        try:
+            p = param if isinstance(param, dict) else {}
+            raw = p.get("u") or p.get("url") or ""
+            url = _b64d(raw) if raw and "://" not in str(raw) else str(raw)
+            if not url.startswith("http"):
+                return [400, "text/plain", b"bad image url"]
+            data = _fetch_pic_bytes(url)
+            rev = _unreverse_pic(data)
+            if rev is not None:
+                data = rev
+            return [200, _img_ct(data, url), data]
+        except Exception:
+            return [502, "text/plain", b"proxy error"]
 
     def proxy(self, param, *args):
         # 壳子走蜘蛛 proxy 取图时也反转字节, 回真图 + 正确 Content-Type

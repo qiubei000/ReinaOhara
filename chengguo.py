@@ -5,7 +5,99 @@ import sys
 import uuid
 from urllib.parse import quote
 
-import requests
+try:
+    import requests
+except Exception:
+    # 无 requests 时用 urllib 实现同名/同接口的最小封装：
+    # requests.Session（headers.update / get / post）及模块级 get/post，
+    # 返回对象带 status_code / text / content / json()，与本文件用法一致。
+    import types
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    class _UrllibResponse:
+        def __init__(self, status_code, content, url=""):
+            self.status_code = status_code
+            self.content = content or b""
+            self.url = url
+            self.headers = {}
+
+        @property
+        def text(self):
+            return self.content.decode("utf-8", errors="ignore")
+
+        def json(self):
+            return json.loads(self.text)
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise urllib.error.HTTPError(self.url, self.status_code, "HTTP Error", {}, None)
+
+    def _urllib_request(method, url, data=None, json_data=None, headers=None, timeout=30, **kwargs):
+        body = None
+        hdrs = dict(headers or {})
+        if json_data is not None:
+            body = json.dumps(json_data).encode("utf-8")
+            hdrs.setdefault("Content-Type", "application/json")
+        elif isinstance(data, dict):
+            body = urllib.parse.urlencode(data).encode("utf-8")
+            hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        elif isinstance(data, str):
+            body = data.encode("utf-8")
+        elif data is not None:
+            body = data
+        req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return _UrllibResponse(resp.status, resp.read(), url)
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read()
+            except Exception:
+                err_body = b""
+            return _UrllibResponse(e.code, err_body, url)
+
+    class _UrllibSession:
+        def __init__(self):
+            self.headers = {}
+
+        def _merged_headers(self, headers):
+            merged = dict(self.headers)
+            merged.update(headers or {})
+            return merged
+
+        def get(self, url, timeout=30, headers=None, **kwargs):
+            return _urllib_request("GET", url, headers=self._merged_headers(headers), timeout=timeout)
+
+        def post(self, url, data=None, json=None, timeout=30, headers=None, **kwargs):
+            return _urllib_request("POST", url, data=data, json_data=json,
+                                   headers=self._merged_headers(headers), timeout=timeout)
+
+        def request(self, method, url, data=None, json=None, timeout=30, headers=None, **kwargs):
+            return _urllib_request(method, url, data=data, json_data=json,
+                                   headers=self._merged_headers(headers), timeout=timeout)
+
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _urllib_get(url, timeout=30, headers=None, **kwargs):
+        return _urllib_request("GET", url, headers=headers, timeout=timeout)
+
+    def _urllib_post(url, data=None, json=None, timeout=30, headers=None, **kwargs):
+        return _urllib_request("POST", url, data=data, json_data=json, headers=headers, timeout=timeout)
+
+    def _urllib_request_fn(method, url, data=None, json=None, timeout=30, headers=None, **kwargs):
+        return _urllib_request(method, url, data=data, json_data=json, headers=headers, timeout=timeout)
+
+    requests = types.SimpleNamespace(Session=_UrllibSession, get=_urllib_get,
+                                     post=_urllib_post, request=_urllib_request_fn)
 
 sys.path.append('..')
 from base.spider import Spider as BaseSpider

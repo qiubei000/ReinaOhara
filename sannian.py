@@ -11,7 +11,6 @@ import re
 import requests
 import urllib3
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import os
 
 sys.path.append('..')
 from base.spider import Spider
@@ -24,8 +23,7 @@ class Spider(Spider):
     
     # ========== 配置 ==========
     DOMAIN_API = "https://lwncnss3api.cc/api/getapi.php"
-    CACHE_FILE = "domain_cache_3n.json"
-    CACHE_EXPIRE = 3600  # 缓存有效期1小时
+    CACHE_EXPIRE = 3600  # 内存缓存有效期1小时（只放内存，不写文件）
     
     # 注册渠道码轮询表（写死的渠道被站方停用时会自动换下一个）
     CHANNEL_CODES = ["", "default", "test", "vbtqg9d8"]
@@ -130,14 +128,9 @@ class Spider(Spider):
         self.working_domains = []
         self.current_domain_index = 0
         self.channel_idx = 0
-        self._load_domains()
-        if len(self.domains) < 3:
-            self.domains.extend(self.BACKUP_DOMAINS)
-            self.domains = list(set(self.domains))
-        # 统一过滤掉已失效的域名（cloudfront / lld 系列）
-        self.domains = [d for d in self.domains if self._valid_domain(d)]
-        if not self.domains:
-            self.domains = self.BACKUP_DOMAINS.copy()
+        # 域名懒加载：构造时不联网、不碰磁盘；第一次需要域名时再拉取
+        self._domains_loaded = False
+        self._domains_ts = 0.0
 
     def _valid_domain(self, d):
         """过滤已确认失效的域名"""
@@ -172,101 +165,79 @@ class Spider(Spider):
     def destroy(self):
         pass
 
-    # ========== 域名管理 ==========
-    def _get_cache_path(self):
-        """获取缓存文件路径"""
-        return os.path.join(os.path.dirname(__file__), self.CACHE_FILE)
-
-    def _load_domains(self):
-        """加载域名列表（优先从缓存读取）- 不过滤黑名单"""
-        cache_path = self._get_cache_path()
-        
-        if os.path.exists(cache_path):
-            try:
-                with open(cache_path, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                    cache_time = cache_data.get('cache_time', 0)
-                    if time.time() - cache_time < self.CACHE_EXPIRE:
-                        domains = cache_data.get('domains', [])
-                        self.domains = [d for d in domains if self._valid_domain(d)]
-                        if self.domains:
-                            print(f'[DOMAIN] Loaded {len(self.domains)} domains from cache')
-                            return
-            except Exception as e:
-                print(f'[CACHE] Read cache failed: {e}')
-        
+    # ========== 域名管理（懒加载：构造时不联网、不写文件） ==========
+    def _ensure_domains(self):
+        """第一次需要域名时才联网拉取，失败用内置默认域名；结果只放内存"""
+        if self._domains_loaded and time.time() - self._domains_ts < self.CACHE_EXPIRE:
+            return
         self._fetch_domains()
+        # 域名不足时补内置备用域名，并统一过滤掉已失效的域名（cloudfront / lld 系列）
+        if len(self.domains) < 3:
+            self.domains.extend(self.BACKUP_DOMAINS)
+            self.domains = list(set(self.domains))
+        self.domains = [d for d in self.domains if self._valid_domain(d)]
+        if not self.domains:
+            self.domains = self.BACKUP_DOMAINS.copy()
+        self._domains_loaded = True
+        self._domains_ts = time.time()
 
     def _fetch_domains(self):
-        """从API获取域名列表并缓存 - 不过滤黑名单，全部轮询"""
+        """从API获取域名列表 - 不过滤黑名单，全部轮询"""
         try:
             r = requests.get(self.DOMAIN_API, timeout=10, verify=False)
-            
+
             try:
                 data = r.json()
-            except:
+            except Exception:
                 domains = re.findall(r'[\w\-\.]+\.(?:com|cc|net|org|site|top|xyz)', r.text)
                 if domains:
                     self.domains = list(set(domains))
-                    self._save_cache(self.domains)
-                    return
-            
+                    print(f'[DOMAIN] Fetched {len(self.domains)} domains from API')
+                else:
+                    self.domains = self.BACKUP_DOMAINS.copy()
+                return
+
             if data.get('code') == 200:
                 domains = data.get('data', [])
                 blacklist = data.get('blackdomain', [])
-                
+
                 if isinstance(domains, str):
                     try:
                         domains = json.loads(domains)
-                    except:
+                    except Exception:
                         domains = [domains]
-                
+
                 if not isinstance(domains, list):
                     domains = [str(domains)] if domains else []
-                
+
                 # 不过滤黑名单，合并所有域名
                 all_domains = list(set(domains + blacklist))
                 self.domains = [d for d in all_domains if self._valid_domain(d)]
                 if not self.domains:
                     self.domains = self.BACKUP_DOMAINS.copy()
-                
+
                 # 把 data 里的域名放在前面
                 priority_domains = [d for d in domains if d and '.' in d]
                 other_domains = [d for d in self.domains if d not in priority_domains]
                 self.domains = priority_domains + other_domains
-                
+
                 if self.domains:
                     print(f'[DOMAIN] Fetched {len(self.domains)} domains from API')
-                    self._save_cache(all_domains)
                 else:
                     print('[DOMAIN] No valid domains, using backup')
                     self.domains = self.BACKUP_DOMAINS.copy()
             else:
-                print(f'[DOMAIN] API returned error, using backup')
+                print('[DOMAIN] API returned error, using backup')
                 self.domains = self.BACKUP_DOMAINS.copy()
         except Exception as e:
             print(f'[DOMAIN] Fetch failed: {e}')
             self.domains = self.BACKUP_DOMAINS.copy()
 
-    def _save_cache(self, domains):
-        """保存缓存"""
-        try:
-            cache_data = {
-                'domains': domains,
-                'cache_time': time.time()
-            }
-            cache_path = self._get_cache_path()
-            with open(cache_path, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f'[CACHE] Save failed: {e}')
-
     def _get_base_url(self):
         """获取当前可用的基础URL"""
+        self._ensure_domains()
         if not self.domains:
-            self._load_domains()
-            if not self.domains:
-                return "https://dag29jmgma1g.site"
+            return "https://dag29jmgma1g.site"
         
         # 尝试之前找到的工作域名
         if self.working_domains:

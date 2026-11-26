@@ -66,7 +66,22 @@ import urllib.request
 import uuid
 import zlib
 
-from spider_runner import OmniBox, run
+# spider_runner 在仓库中不存在，WebHomeTV/Chaquopy 也不提供该模块，
+# 原 `from spider_runner import OmniBox, run` 会导致整个文件导入失败。
+# 改为文件内自实现（无新依赖）：OmniBox.log 为空操作；run() 仅为
+# __main__ 入口占位——宿主直接 import 本模块并调用 home/category/
+# detail/search/play 等 handler，不依赖 run() 启动服务。
+class OmniBox:
+    """OmniBox 日志接口的最小本地桩：无网络、无副作用。"""
+
+    @staticmethod
+    async def log(level, msg):
+        return None
+
+
+def run(handlers=None):
+    """__main__ 入口占位：本文件作为 spider 被宿主 import 使用，不在此启动服务。"""
+    return None
 
 try:
     from base.spider import Spider as _BaseSpider
@@ -1023,90 +1038,13 @@ def _blob_version(blob):
 
 
 def check_update(url=''):
-    """拉清单 → 需要就下载覆盖。返回结果 dict（绝不影响主流程）。"""
-    url = text(url or UPDATE_URL)
-    out = {'ok': False, 'updated': False, 'version': CODE_VERSION,
-           'msg': '', 'note': '', 'at': time.time()}
-    if not url:
-        out['msg'] = 'no update url'
-        return out
-    try:
-        dest = self_path()
-        if not dest:
-            out['msg'] = 'self path unknown'
-            return out
+    """已禁用：不再联网拉清单、下载、覆盖自身 .py 文件。
 
-        # 每轮都重新拉清单：CDN 边缘节点之间可能不同步（清单落后一版、
-        # 脚本已是新版），死守一份旧清单会永远 sha 对不上。
-        last = ''
-        for attempt in range(3):
-            if attempt:
-                time.sleep(1.2 * attempt)
-            man, status = _fetch_manifest(url)
-            far = text(man.get('version'))
-            if not far:
-                last = 'manifest http %s' % status
-                continue
-            out['version'] = far
-            out['note'] = man.get('note') or ''
-            if not version_newer(far, CODE_VERSION):
-                out['ok'] = True
-                out['msg'] = 'up to date (%s)' % CODE_VERSION
-                return out
-
-            target_url = text(man.get('url'))
-            cands = []
-            if target_url:
-                cands.append(target_url if is_url(target_url)
-                             else urllib.parse.urljoin(url, target_url))
-            # 清单没写地址 / 拼出来 404 时的兜底：同目录 ASCII 名、再退本地同名
-            for name in ('Kishuto.py', self_name()):
-                cands.append(urllib.parse.urljoin(url, name))
-            digest = text(man.get('sha256')).lower()
-
-            blob = b''
-            seen = set()
-            for cand in cands:
-                if cand in seen:
-                    continue
-                seen.add(cand)
-                sep = '&' if '?' in cand else '?'
-                for hit in ('%s%st=%d' % (cand, sep, int(time.time() * 1000)), cand):
-                    st2, body = http(hit, timeout=25, retries=1)
-                    if st2 == 200 and body and b'class Spider' in body:
-                        blob = body
-                        break
-            if not blob:
-                last = 'download failed'
-                continue
-            if len(blob) > UPDATE_MAX_BYTES:
-                out['msg'] = 'too large (%d)' % len(blob)
-                return out
-
-            if digest and hashlib.sha256(blob).hexdigest() != digest:
-                # 清单落后一版时的兜底：只要脚本自身的版本号确实比本地新、
-                # 且不比清单旧，就认可它（版本号是我们自己的单调时间戳）。
-                bver = _blob_version(blob)
-                if bver and version_newer(bver, CODE_VERSION) and \
-                        not version_newer(far, bver):
-                    out['version'] = bver
-                    out['note'] = (out['note'] + ' / sha 兜底').strip(' /')
-                    far = bver
-                else:
-                    last = 'sha256 mismatch'
-                    continue
-
-            done, info = _write_self(dest, blob)
-            out['ok'] = True
-            out['updated'] = done
-            out['msg'] = ('updated %s -> %s, restart to apply'
-                          % (CODE_VERSION, far)) if done else info
-            return out
-        out['msg'] = last or 'update failed'
-        return out
-    except Exception as exc:
-        out['msg'] = 'error: %s' % exc
-        return out
+    保留原签名以兼容旧调用；任何调用都直接返回，不产生任何网络请求、
+    不写盘。原下载覆盖逻辑（_fetch_manifest/_write_self 调用）已删除。
+    """
+    return {'ok': False, 'updated': False, 'version': CODE_VERSION,
+            'msg': 'update disabled', 'note': '', 'at': time.time()}
 
 # ============================================================================
 # 源 1：影探4K（cms.lyyytv.cn）—— 首页 / 分类 / 搜索 的数据来源
@@ -7762,8 +7700,14 @@ class GuluSpider:
                         url = self.protocol.play(parser_id, raw_id)
                     except Exception: url = ""
         if not url: return {"parse": 0, "url": "", "header": json.dumps({"User-Agent": USER_AGENT}), "msg": "解析失败，请尝试更换播放源"}
-        danmaku = "http://127.0.0.1:9978/proxy?do=appdanmu&vodName=" + quote(vod_name, safe="") + "&vodIndex=" + quote(str(episode_index), safe="") + "&vodUrl="
-        return {"parse": 0, "url": url, "header": json.dumps({"User-Agent": USER_AGENT}), "danmaku": danmaku}
+        result = {"parse": 0, "url": url, "header": json.dumps({"User-Agent": USER_AGENT})}
+        try:
+            # 弹幕地址仅为可选附加字段：本地弹幕服务不存在/构造失败时也不影响播放，
+            # 绝不因此抛异常或丢掉已解析出的 url。地址本身保留 127.0.0.1:9978。
+            result["danmaku"] = ("http://127.0.0.1:9978/proxy?do=appdanmu&vodName=" + quote(vod_name, safe="") + "&vodIndex=" + quote(str(episode_index), safe="") + "&vodUrl=")
+        except Exception:
+            pass
+        return result
 
     def getName(self): return "咕噜咕噜"
     def isVideoFormat(self, url): return self._is_playable_url(url)

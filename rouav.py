@@ -25,6 +25,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 import zlib
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import quote, unquote, urljoin, urlparse
@@ -573,23 +574,29 @@ class Spider(SpiderBase):
         url = self._resolve_video(id)
         if not url:
             return {"parse": 1, "playUrl": "", "url": "", "header": {}}
-        # 真实播放地址是 /api/hls/xxx（HLS 清单但没有 .m3u8 后缀），
-        # 走插件本地代理：地址以 .m3u8 结尾，清单/分片都由插件带 UA/Referer 拉取。
+        header = {"User-Agent": UA, "Referer": self.host + "/"}
+        direct = {"parse": 0, "playUrl": "", "url": url, "header": header}
+        # 主线路：直链。地址本身就是 .m3u8/.mp4 时直接播，不经过本地代理。
+        low = url.lower()
+        if ".m3u8" in low or low.endswith(".mp4"):
+            return direct
+        # 兜底：地址是 /api/hls/xxx 这类无后缀 HLS 清单时才走本地代理
+        # （代理把清单/分片重写成 .m3u8 结尾）；代理起不来或取不到清单
+        # 时自动回直链，不让播放全灭。
         try:
             port = _ensure_hls_server()
             local_url = "%s/local.m3u8?u=%s" % (_hls_base(port), _b64url(url))
-            return {"parse": 0, "playUrl": "", "url": local_url, "header": {}}
+            try:
+                req = urllib.request.Request(local_url, headers={"User-Agent": UA})
+                with urllib.request.urlopen(req, timeout=6) as r:
+                    body = r.read(4096)
+                if r.status == 200 and b"#EXTM3U" in body:
+                    return {"parse": 0, "playUrl": "", "url": local_url, "header": {}}
+            except Exception:
+                pass
         except Exception:
             pass
-        return {
-            "parse": 0,
-            "playUrl": "",
-            "url": url,
-            "header": {
-                "User-Agent": UA,
-                "Referer": self.host + "/",
-            },
-        }
+        return direct
 
     def localProxy(self, param):
         return None

@@ -591,6 +591,12 @@ class Spider(_BaseSpider):
         info_lines.append(NODE_LINE)
         content = "\n".join(info_lines) + "\n" + DIVIDER_THIN + "\n" + MARKER + "\n" + (title or "") + "\n" + SYNOPSIS_GROUP
         play_url = "全集$%s" % _gallery_id("px", pid) + "$$$" + "全集$%s" % _gallery_id("dir", pid)
+        play_from = LINE_NAME + "$$$" + LINE_NAME_ALT
+        # 单张线路（WebHomeTV 兜底）：每集一张直链图，不依赖 pics://
+        single_url = "#".join("第{}张$img:{}:{}".format(i + 1, pid, i) for i in range(len(images)))
+        if single_url:
+            play_url = play_url + "$$$" + single_url
+            play_from = play_from + "$$$单张"
         vod = {
             "vod_id": pid,
             "vod_name": title,
@@ -601,13 +607,31 @@ class Spider(_BaseSpider):
             "vod_director": BRAND_DIRECTOR,
             "vod_content": content,
             "vod_remarks": ("%dP" % total_p) if total_p else "",
-            "vod_play_from": LINE_NAME + "$$$" + LINE_NAME_ALT,
+            "vod_play_from": play_from,
             "vod_play_url": play_url,
         }
         return {"list": [vod]}
 
     def playerContent(self, flag, id, vipFlags=None):
         mid = str(id or "").strip()
+        # 单张：img:<pid>:<idx> -> 直接返回那一张图的直链地址
+        if mid.startswith("img:"):
+            parts = mid.split(":")
+            pid = parts[1] if len(parts) > 1 else ""
+            try:
+                idx = int(parts[2]) if len(parts) > 2 else 0
+            except Exception:
+                idx = 0
+            try:
+                imgs = self._collect_images(pid)
+            except _Blocked:
+                return {"parse": 0, "url": "", "msg": BLOCK_MSG}
+            except Exception:
+                return {"parse": 0, "url": "", "msg": "取图失败：%s" % pid}
+            if not imgs or idx >= len(imgs):
+                return {"parse": 0, "url": "", "msg": "没有解析到图片"}
+            return {"parse": 0, "url": imgs[idx],
+                    "header": {"User-Agent": IMG_UA, "Referer": IMG_REF}}
         if mid.startswith("http") and "img.xchina.io" in mid:
             imgs = [mid]
             mode = "dir"

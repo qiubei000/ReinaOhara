@@ -332,6 +332,10 @@ class Spider(_BaseSpider):
         if r["shot"]:
             play_from.append("截图")
             play_url.append("截图$pics://" + r["shot"])
+            # 单张线路（WebHomeTV 兜底）：一集一张截图直链，不依赖 pics://
+            # 表里每部作品只有一张截图，所以单张线路只有第 1 张
+            play_from.append("单张")
+            play_url.append("第1张$img:" + str(idx))
 
         vod = {
             "vod_id": str(idx),
@@ -348,6 +352,14 @@ class Spider(_BaseSpider):
         return {"list": [vod]}
 
     def playerContent(self, flag, id, vipFlags=None):
+        # 单张：img:<行号> -> 直接返回那部作品的截图直链
+        if isinstance(id, str) and id.startswith("img:"):
+            try:
+                idx = int(id.split(":", 1)[1])
+                rows = self._load()
+                return {"parse": 0, "url": rows[idx]["shot"], "header": {}}
+            except Exception:
+                return {"parse": 0, "url": "", "header": {}}
         # 女优 / 厂牌里的作品：点开时按行号取那部的链接
         if isinstance(id, str) and id.startswith("video:"):
             try:
@@ -361,6 +373,12 @@ class Spider(_BaseSpider):
             return {"parse": 0, "url": id, "header": {}}
         # 磁力 / ed2k：id 本身就是链接，直接返回给播放器
         return {"parse": 0, "url": id, "header": {}}
+
+    def isVideoFormat(self, url):
+        u = str(url or "")
+        return (u.startswith("magnet:") or u.startswith("pics://")
+                or ".jpg" in u or ".jpeg" in u or ".png" in u or ".webp" in u
+                or ".m3u8" in u or ".mp4" in u)
 
     def localProxy(self, param):
         return [200, "video/MP2T", None, ""]

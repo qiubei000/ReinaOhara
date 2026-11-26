@@ -8,6 +8,100 @@ import base64
 from urllib.parse import quote, unquote
 from base.spider import Spider as BaseSpider
 
+# 纯 Python AES-128-CBC 解密（与 chengguo.py 相同写法）：
+# WebHomeTV/Chaquopy 无 cryptography、无 pycryptodome 时的最后兜底。
+_SBOX = bytes.fromhex("637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b27509832c1a1b6e5aa0523bd6b329e32f8453d100ed20fcb15b6acbbe394a4c58cfd0efaafb434d338545f9027f503c9fa851a3408f929d38f5bcb6da2110fff3d2cd0c13ec5f974417c4a77e3d645d197360814fdc222a908846eeb814de5e0bdbe0323a0a4906245cc2d3ac629195e479e7c8376d8dd54ea96c56f4ea657aae08ba78252e1ca6b4c6e8dd741f4bbd8b8a703eb5664803f60e613557b986c11d9ee1f8981169d98e949b1e87e9ce5528df8ca1890dbfe6426841992d0fb054bb16")
+_INV_SBOX = bytearray(256)
+for _i in range(256):
+    _INV_SBOX[_SBOX[_i]] = _i
+
+
+def _gf_mul(a, b):
+    p = 0
+    for _ in range(8):
+        if b & 1:
+            p ^= a
+        hi = a & 0x80
+        a = (a << 1) & 0xFF
+        if hi:
+            a ^= 0x1B
+        b >>= 1
+    return p
+
+
+def _expand_key(key):
+    w = list(key)
+    rcon = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
+    for i in range(4, 44):
+        temp = w[4 * (i - 1):4 * i]
+        if i % 4 == 0:
+            temp = [_SBOX[temp[1]] ^ rcon[i // 4 - 1], _SBOX[temp[2]], _SBOX[temp[3]], _SBOX[temp[0]]]
+        for j in range(4):
+            w.append(w[4 * (i - 4) + j] ^ temp[j])
+    return w
+
+
+def _decrypt_block(block, w):
+    s = list(block)
+
+    def add_round_key(rnd):
+        for i in range(16):
+            s[i] ^= w[16 * rnd + i]
+
+    def inv_shift_rows():
+        old = s[:]
+        for r in range(4):
+            for c in range(4):
+                s[4 * c + r] = old[4 * ((c - r) % 4) + r]
+
+    def inv_sub_bytes():
+        for i in range(16):
+            s[i] = _INV_SBOX[s[i]]
+
+    def inv_mix_columns():
+        for c in range(4):
+            i = 4 * c
+            a0, a1, a2, a3 = s[i], s[i + 1], s[i + 2], s[i + 3]
+            s[i] = _gf_mul(a0, 14) ^ _gf_mul(a1, 11) ^ _gf_mul(a2, 13) ^ _gf_mul(a3, 9)
+            s[i + 1] = _gf_mul(a0, 9) ^ _gf_mul(a1, 14) ^ _gf_mul(a2, 11) ^ _gf_mul(a3, 13)
+            s[i + 2] = _gf_mul(a0, 13) ^ _gf_mul(a1, 9) ^ _gf_mul(a2, 14) ^ _gf_mul(a3, 11)
+            s[i + 3] = _gf_mul(a0, 11) ^ _gf_mul(a1, 13) ^ _gf_mul(a2, 9) ^ _gf_mul(a3, 14)
+
+    add_round_key(10)
+    for rnd in range(9, 0, -1):
+        inv_shift_rows()
+        inv_sub_bytes()
+        add_round_key(rnd)
+        inv_mix_columns()
+    inv_shift_rows()
+    inv_sub_bytes()
+    add_round_key(0)
+    return bytes(s)
+
+
+def _aes_cbc_decrypt_pure(data, key, iv):
+    w = _expand_key(key)
+    out = bytearray()
+    prev = iv
+    for off in range(0, len(data) - 15, 16):
+        block = data[off:off + 16]
+        dec = _decrypt_block(block, w)
+        out.extend(dec[i] ^ prev[i] for i in range(16))
+        prev = block
+    if out:
+        pad = out[-1]
+        if 1 <= pad <= 16:
+            out = out[:-pad]
+    return bytes(out)
+
+
+def _unpad_pkcs7(plain):
+    if plain and plain[-1] <= 16:
+        pad = plain[-1]
+        if pad > 0 and plain.endswith(bytes([pad]) * pad):
+            return plain[:-pad]
+    return plain
+
 
 class Spider(BaseSpider):
     host = "https://aihuangdou.com"
@@ -268,19 +362,28 @@ class Spider(BaseSpider):
             pass
 
     def _decrypt_image(self, data):
+        # 三级兜底（与 chengguo.py 相同顺序思路）：
+        # 1) Crypto.Cipher.AES（pycryptodome，WebHomeTV requirements 自带）
+        # 2) cryptography  3) 纯 Python AES
+        # 同 key/iv/MODE_CBC，解密结果一致；去 PKCS7 填充沿用原校验写法。
+        key = self._img_key.encode("utf-8")
+        iv = self._img_iv.encode("utf-8")
+        if len(key) != 16 or len(iv) != 16 or not data or len(data) % 16:
+            return b""
+        try:
+            from Crypto.Cipher import AES
+            return _unpad_pkcs7(AES.new(key, AES.MODE_CBC, iv).decrypt(data))
+        except Exception:
+            pass
         try:
             from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-            key = self._img_key.encode("utf-8")
-            iv = self._img_iv.encode("utf-8")
-            if len(key) != 16 or len(iv) != 16:
-                return b""
             decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
             plain = decryptor.update(data) + decryptor.finalize()
-            if plain and plain[-1] <= 16:
-                pad = plain[-1]
-                if pad > 0 and plain.endswith(bytes([pad]) * pad):
-                    plain = plain[:-pad]
-            return plain
+            return _unpad_pkcs7(plain)
+        except Exception:
+            pass
+        try:
+            return _aes_cbc_decrypt_pure(data, key, iv)
         except Exception:
             return b""
 

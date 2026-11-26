@@ -15,7 +15,8 @@
         所以详情只给文章地址 + ?aw_ep=N，playerContent 现场解析）
 - 搜索：/search/<词>/，翻页 /search/<词>/<N>/
 - 封面：pic.gyezbp.cn 的 jpg 是 AES-128-CBC 密文（海角同款 key/iv），
-        本源纯 Python 解密，本机 127.0.0.1:39009 懒加载图床
+        本源纯 Python 解密，本机 127.0.0.1 临时端口懒加载图床
+        （bind 0 随机端口，绑定失败时封面回退原图直链）
 - 播放：AES-128 HLS，crypt.key 与分片均在 tx.doudou520.online，直连 200
 
 别催了壳导入：
@@ -44,7 +45,8 @@ BASE = "https://51aw.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 TIMEOUT = 30
-PIC_PORT = 39009
+# 封面解密图床：不固定端口，bind 0 由系统分临时端口（固定端口在
+# WebHomeTV/多开环境下容易被占，绑定失败就全站没封面）
 CF_SNI = "dy9lmpl409uuf.cloudfront.net"
 SITE_HOSTS = ("51aw.com", "www.51aw.com")
 PER_PAGE = 20
@@ -390,7 +392,11 @@ def _pic_url(url):
         return ""
     if url.startswith("//"):
         url = "https:" + url
-    return "http://127.0.0.1:%d/img?u=%s" % (PIC_PORT, urllib.parse.quote(url, safe=""))
+    srv = _pic_server()
+    if srv and _PIC_PORT[0]:
+        return "http://127.0.0.1:%d/img?u=%s" % (_PIC_PORT[0], urllib.parse.quote(url, safe=""))
+    # 图床起不来时回退原图直链，不要让封面 404 全灭
+    return url
 
 
 class _PicHandler(BaseHTTPRequestHandler):
@@ -426,19 +432,27 @@ class _ThreadHTTPServer(ThreadingMixIn, HTTPServer):
 
 
 _PIC_SERVER = [None]
+_PIC_PORT = [0]
+_PIC_LOCK = threading.Lock()
 
 
 def _pic_server():
     if _PIC_SERVER[0] is not None:
         return _PIC_SERVER[0]
-    try:
-        srv = _ThreadHTTPServer(("127.0.0.1", PIC_PORT), _PicHandler)
-        t = threading.Thread(target=srv.serve_forever)
-        t.daemon = True
-        t.start()
-        _PIC_SERVER[0] = srv
-    except Exception:
-        _PIC_SERVER[0] = False
+    with _PIC_LOCK:
+        if _PIC_SERVER[0] is not None:
+            return _PIC_SERVER[0]
+        try:
+            # bind 0：系统分临时端口，避免固定端口被占导致起不来
+            srv = _ThreadHTTPServer(("127.0.0.1", 0), _PicHandler)
+            t = threading.Thread(target=srv.serve_forever)
+            t.daemon = True
+            t.start()
+            _PIC_PORT[0] = srv.server_address[1]
+            _PIC_SERVER[0] = srv
+        except Exception:
+            _PIC_SERVER[0] = False
+            _PIC_PORT[0] = 0
     return _PIC_SERVER[0]
 
 
