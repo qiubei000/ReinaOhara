@@ -54,7 +54,7 @@ except Exception:
 BASE = "https://ltxlib.dpdns.org"
 HOST = "ltxlib.dpdns.org"
 UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-COOKIE = "ltx_c=225692fb4577fb242a129b3618b13330; cf_clearance=CiBtPdUsG_P89noiCuSppuP3FpX2vgjM_gE3btK2AVUKEj_CKQSzovEqjlcIJKzMtIqhn1P9RelAr3qGydVRgkdXVaKzstcM_ClOC0Daz0zUfRmHqulwGh60D4jzuZFaFir4s3vUJ5B8i30MlNI1zUZiuynuJJTFtKA_F1cJpNXTS_SwYpTSxYpim4jqWELQGVlBatOyAj6CIE6ds4UMism4E2Ci5w8-uXB3brkgXkLTUlV6R--OYaolQibmudD_y5xNCi_ZH3L41biBfUGm_j6oTKBysm9zEUpKJ4w5DIxxA7sdydGx7dUDjVo4Ap1CTMCQI6QdxoblpyeNWscq5dwheC8KZf1Z_bGsTwTTuqVnzAcC7leK7lP8mKAyzgjCiCML1ZiIXSOsWHswVzSidh0F-YgoMUCGQVwSb6uBemVmQp7XAg; ltx_pass=d02e498808b0b768700649fd.1796301617844.zIBb1n9HLuOfUPkCjRp7qI-Yid_8NKvj2kpSsJ8UOYo"
+COOKIE = ""
 PAGE_SIZE = 60
 SCAN_LIMIT = 500  # 女优/厂牌扫库时每页拉取数；接口若有上限会自动按实际返回数分页
 
