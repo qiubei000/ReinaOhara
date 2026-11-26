@@ -234,6 +234,15 @@
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1
+    },
+    {
+      "key": "qishe.py",
+      "name": "妻社",
+      "type": 3,
+      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/qishe.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
     }
   ]
 }
