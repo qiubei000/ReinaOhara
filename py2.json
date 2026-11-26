@@ -207,6 +207,15 @@
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1
+    },
+    {
+      "key": "4khd.py",
+      "name": "4KHD",
+      "type": 3,
+      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/4khd.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
     }
   ]
 }
