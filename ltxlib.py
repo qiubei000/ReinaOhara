@@ -328,6 +328,7 @@ class Spider(BaseSpider):
         self._snapshot = ""
         self._snap_key = ""
         self._index = None  # {"actors": [...], "makers": [...]}，扫库一次后本会话内缓存
+        self._diag = ""  # 诊断用：最近一次失败卡在哪一步，失败时当成一条显示出来
         cfg = {}
         if isinstance(extend, dict):
             cfg = extend
@@ -378,17 +379,22 @@ class Spider(BaseSpider):
         if status == 403:
             reason = (data or {}).get("reason", "")
             if reason in ("verify", "origin"):
+                self._diag = "会话接口 403 verify（票据无效/过期）"
                 raise _VerifyNeeded()
+            self._diag = "会话接口 403"
             raise _Blocked()
         if status != 200 or not isinstance(data, dict):
             if raw[:15].lower().find(b"cloudflare") >= 0 or b"Attention Required" in raw[:2000]:
+                self._diag = "会话接口被 Cloudflare 拦截"
                 raise _Blocked()
+            self._diag = "会话接口返回 %s" % status
             raise _Blocked()
         sid = data.get("sid") or ""
         expires = data.get("expiresAt") or 0
         peer = _b64u_decode(data.get("publicKey") or "")
         salt = _b64u_decode(data.get("salt") or "")
         if data.get("v") != 1 or not sid or len(peer) != 65 or len(salt) != 32:
+            self._diag = "会话返回字段不对（v/sid/公钥/盐）"
             raise _Blocked()
         shared = _ecdh_shared(priv, peer)
         key = _hkdf_sha256(salt, shared, ("ltx-api-response-v1:" + sid).encode("utf-8"), 32)
@@ -427,24 +433,31 @@ class Spider(BaseSpider):
                 except Exception:
                     data = {}
                 if isinstance(data, dict) and data.get("reason") in ("verify", "origin"):
+                    self._diag = "数据接口 403 verify（票据无效/过期）"
                     raise _VerifyNeeded()
+                self._diag = "数据接口 403"
                 raise _Blocked()
             if "application/vnd.ltx.encrypted+json" not in (ct or ""):
+                self._diag = "数据接口返回非加密内容（%s）" % status
                 if status != 200:
                     raise _Blocked()
                 raise _Blocked()
             try:
                 env = json.loads(raw.decode("utf-8", "replace"))
             except Exception:
+                self._diag = "加密信封解析失败"
                 raise _Blocked()
             if (env.get("v") != 1 or env.get("sid") != sess["sid"]
                     or env.get("rid") != rid):
+                self._diag = "加密信封校验失败（v/sid/rid 不符）"
                 raise _Blocked()
             encoding = env.get("encoding") or "identity"
             if encoding not in ("identity", "gzip"):
+                self._diag = "未知编码 %s" % encoding
                 raise _Blocked()
             iv = _b64u_decode(env.get("iv") or "")
             if len(iv) != 12:
+                self._diag = "IV 长度不对"
                 raise _Blocked()
             parsed = urllib.parse.urlparse(url)
             path_q = parsed.path + (("?" + parsed.query) if parsed.query else "")
@@ -455,10 +468,20 @@ class Spider(BaseSpider):
             try:
                 plain = _aes_gcm_decrypt(sess["key"], iv, _b64u_decode(env.get("body") or ""), aad)
             except Exception:
+                self._diag = "解密失败（密钥或 AAD 不对）"
                 raise _Blocked()
             if encoding == "gzip":
-                plain = gzip.decompress(plain)
-            return json.loads(plain.decode("utf-8", "replace"))
+                try:
+                    plain = gzip.decompress(plain)
+                except Exception:
+                    self._diag = "gzip 解压失败"
+                    raise _Blocked()
+            try:
+                return json.loads(plain.decode("utf-8", "replace"))
+            except Exception:
+                self._diag = "解密后内容解析失败"
+                raise _Blocked()
+        self._diag = "接口 428 重试后仍失败"
         raise _Blocked()
 
     def _query(self, params, key=""):
@@ -659,17 +682,26 @@ class Spider(BaseSpider):
             q["actor"] = str(tid)[6:]
         return q
 
+    def _diag_item(self, text):
+        # 诊断用：失败时把原因当成一条显示在列表里，方便截图定位
+        return {"vod_id": "diag", "vod_name": "【诊断】" + text,
+                "vod_pic": "", "vod_remarks": "截图发我",
+                "vod_content": text}
+
     def homeVideoContent(self):
         try:
             data = self._query(
                 {"status": "all", "sort": {"field": "score", "dir": "desc"},
                  "offset": 0, "limit": PAGE_SIZE}, key="home")
         except _VerifyNeeded:
-            return {"list": [], "msg": VERIFY_MSG}
+            return {"list": [self._diag_item(self._diag or "票据无效")],
+                    "msg": VERIFY_MSG}
         except _Blocked:
-            return {"list": [], "msg": BLOCK_MSG}
-        except Exception:
-            return {"list": []}
+            return {"list": [self._diag_item(self._diag or "请求被拒")],
+                    "msg": BLOCK_MSG}
+        except Exception as e:
+            return {"list": [self._diag_item(
+                "出错 %s: %s" % (type(e).__name__, str(e)[:60]))]}
         return self._list_result(data, 1)
 
     def categoryContent(self, tid, pg, filter=None, extend=None):
@@ -678,28 +710,36 @@ class Spider(BaseSpider):
             try:
                 return self._index_page(str(tid), pg)
             except _VerifyNeeded:
-                return {"list": [], "page": pg, "pagecount": 1,
+                return {"list": [self._diag_item(self._diag or "票据无效")],
+                        "page": pg, "pagecount": 1,
                         "limit": PAGE_SIZE, "total": 0, "msg": VERIFY_MSG}
             except _Blocked:
-                return {"list": [], "page": pg, "pagecount": 1,
+                return {"list": [self._diag_item(self._diag or "请求被拒")],
+                        "page": pg, "pagecount": 1,
                         "limit": PAGE_SIZE, "total": 0, "msg": BLOCK_MSG}
-            except Exception:
-                return {"list": [], "page": pg, "pagecount": 1,
-                        "limit": PAGE_SIZE, "total": 0}
+            except Exception as e:
+                return {"list": [self._diag_item(
+                    "出错 %s: %s" % (type(e).__name__, str(e)[:60]))],
+                    "page": pg, "pagecount": 1,
+                    "limit": PAGE_SIZE, "total": 0}
         q = self._query_for_tid(str(tid or "all"))
         q["offset"] = (pg - 1) * PAGE_SIZE
         q["limit"] = PAGE_SIZE
         try:
             data = self._query(q, key="cat:" + str(tid))
         except _VerifyNeeded:
-            return {"list": [], "page": pg, "pagecount": 1,
+            return {"list": [self._diag_item(self._diag or "票据无效")],
+                    "page": pg, "pagecount": 1,
                     "limit": PAGE_SIZE, "total": 0, "msg": VERIFY_MSG}
         except _Blocked:
-            return {"list": [], "page": pg, "pagecount": 1,
+            return {"list": [self._diag_item(self._diag or "请求被拒")],
+                    "page": pg, "pagecount": 1,
                     "limit": PAGE_SIZE, "total": 0, "msg": BLOCK_MSG}
-        except Exception:
-            return {"list": [], "page": pg, "pagecount": 1,
-                    "limit": PAGE_SIZE, "total": 0}
+        except Exception as e:
+            return {"list": [self._diag_item(
+                "出错 %s: %s" % (type(e).__name__, str(e)[:60]))],
+                "page": pg, "pagecount": 1,
+                "limit": PAGE_SIZE, "total": 0}
         return self._list_result(data, pg)
 
     def searchContent(self, key, quick=False, pg="1"):
