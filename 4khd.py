@@ -4,7 +4,15 @@
 # 每套图集是图片集（不是视频）：详情点开用 pics:// 看图，
 # 原图下载走 TeraBox 链接，解压密码 4KHD（站内写明）
 #
-# v3 双壳支持（2026-11-26）：
+# v4 封面换图床（2026-11-26）：
+# i0.wp.com 在她手机网络上打不开（Photon 限流 429 + 疑似
+# 域名不通），封面和两条看图线路全灭。改走 weserv 图片代理：
+# 原图在 Google 图床 yt4.googleusercontent.com 上，站内地址
+# pic.4khd.com/<path> 302 跳过去时路径第 2 段末尾的 l 会变成 I
+#（12 张实测全是这个规律），先按这个规律换算成 yt4 地址，
+# 再包一层 https://images.weserv.nl/?url=yt4...&w=850/1000
+#（Cloudflare 代理，国内可达，有缓存，不再吃 Photon 限流）。
+# weserv 直接代理 i0.wp.com 会 400，所以必须先换算到 yt4。
 # WebHomeTV 是 FongMi 的分支（同包名 com.fongmi.android.tv、同份
 # py2.json 配置、同款 Chaquopy Python 爬虫），列表/搜索/详情
 # 原样通用。差别只在看图：FongMi 有 pics:// 图集浏览器，
@@ -245,15 +253,18 @@ class Spider(BaseSpider):
         return _html.unescape(s).strip()
 
     def _proxy_img(self, url, cover=False):
-        """Photon 分流：i0-i3 按路径哈希分配；封面 resize 小图，正文图 w=1000。"""
-        m = re.match(r"https://i\d\.wp\.com/(pic\.4khd\.com/.+?\.webp)", url or "")
+        """图床换 weserv：pic.4khd.com 路径第 2 段末尾 l->I 换算成
+        yt4.googleusercontent.com 真实地址，再包 weserv 代理。"""
+        m = re.match(r"https://(?:i\d\.wp\.com/)?pic\.4khd\.com/(.+?\.webp)", url or "")
         if not m:
             return url
-        path = m.group(1)
-        sub = sum(path.encode("utf-8")) % 4
-        if cover:
-            return f"https://i{sub}.wp.com/{path}?resize=850%2C1158"
-        return f"https://i{sub}.wp.com/{path}?w=1000"
+        path = m.group(1).split("?")[0]
+        segs = path.split("/")
+        if len(segs) > 1 and segs[1].endswith("l"):
+            segs[1] = segs[1][:-1] + "I"
+        yt = "yt4.googleusercontent.com/" + "/".join(segs)
+        w = 850 if cover else 1000
+        return f"https://images.weserv.nl/?url={yt}&w={w}"
 
     def _extract_images(self, content):
         imgs = []
