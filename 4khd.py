@@ -3,6 +3,21 @@
 # WordPress 站：列表走 HTML（轻量），详情走 WP REST API（干净）
 # 每套图集是图片集（不是视频）：详情点开用 pics:// 看图，
 # 原图下载走 TeraBox 链接，解压密码 4KHD（站内写明）
+#
+# v3 双壳支持（2026-11-26）：
+# WebHomeTV 是 FongMi 的分支（同包名 com.fongmi.android.tv、同份
+# py2.json 配置、同款 Chaquopy Python 爬虫），列表/搜索/详情
+# 原样通用。差别只在看图：FongMi 有 pics:// 图集浏览器，
+# WebHomeTV 那边没有公开文档确认支持 pics://，所以详情给两条线路：
+# “图集”走 pics:// 分段（FongMi 用），“单张”每集一张直链图
+# （不依赖 pics:// 的壳子用，壳子按 isVideoFormat 把 .webp 当
+# 可播地址处理）。两条线用同一套分流后的图地址。
+# 图床是 WordPress Photon（i0.wp.com），一次并行拉 12 张封面或
+# 118 张原图会被限流 429，全部变 broken 图。修复：
+# 1) 图片分流到 i0/i1/i2/i3 四个 Photon 子域名，按 URL 哈希分配；
+# 2) 封面用站内同款 ?resize=850,1158（小图 JPEG），正文图用 ?w=1000；
+# 3) 图集按 20 张分段（图集 1-20 / 21-40 …），不再一次把 118 张
+#    塞进一条超长的 pics:// 里，分段加载才不会一次被限流。
 
 import html as _html
 import json
@@ -18,6 +33,7 @@ except Exception:
 class Spider(BaseSpider):
     host = "https://www.4khd.com"
     api = "https://www.4khd.com/wp-json/wp/v2"
+    CHUNK = 20
 
     cate_list = [
         {"type_id": "home", "type_name": "🆕 最新更新"},
@@ -73,7 +89,6 @@ class Spider(BaseSpider):
             m = re.search(r"/content/\d+/([^/]+)\.html", vid)
             vid = m.group(1) if m else vid
         if not vid.isdigit():
-            # slug 形式：用搜索 API 按 slug 取 id
             try:
                 data = self._api_json(f"{self.api}/posts?slug={quote(vid)}")
                 if data:
@@ -109,6 +124,14 @@ class Spider(BaseSpider):
         if cat_name:
             desc_parts.append(f"分类: {cat_name}")
         desc_parts.append(title)
+        # 两条线路：图集 = pics:// 分段；单张 = 每集一张直链图
+        eps = []
+        for start in range(0, len(imgs), self.CHUNK):
+            end = min(start + self.CHUNK, len(imgs))
+            eps.append(f"图集 {start + 1}-{end}${vid}:{start}:{end - start}")
+        chunk_url = "#".join(eps) if eps else f"查看图集${vid}"
+        single_url = "#".join(f"第{i + 1}张$img:{vid}:{i}" for i in range(len(imgs)))
+        play_url = chunk_url + "$$$" + single_url if single_url else chunk_url
         vod = {
             "vod_id": str(post.get("id", vid)),
             "vod_name": title,
@@ -120,38 +143,68 @@ class Spider(BaseSpider):
             "vod_actor": "",
             "vod_director": "",
             "vod_content": "\n".join(desc_parts),
-            "vod_play_from": "图集",
-            "vod_play_url": f"查看图集${vid}",
+            "vod_play_from": "图集$$$单张",
+            "vod_play_url": play_url,
         }
         return {"list": [vod]}
 
     def playerContent(self, flag, id, vipFlags=None):
-        vid = str(id or "").strip()
-        if vid.startswith("http"):
-            imgs = [vid]
-        else:
+        mid = str(id or "").strip()
+        header = {
+            "User-Agent": self.header["User-Agent"],
+            "Referer": self.host + "/",
+        }
+        # 单张：img:<vid>:<idx> -> 直接返回那一张图的地址
+        if mid.startswith("img:"):
+            parts = mid.split(":")
+            vid = parts[1] if len(parts) > 1 else ""
             try:
-                post = self._api_json(f"{self.api}/posts/{vid}")
-                imgs = self._extract_images(post.get("content", {}).get("rendered", "") or "") if post else []
+                idx = int(parts[2]) if len(parts) > 2 else 0
             except Exception:
-                imgs = []
+                idx = 0
+            imgs = self._get_images(vid)
+            if not imgs or idx >= len(imgs):
+                return {"parse": 0, "url": "", "msg": "没有解析到图片"}
+            return {"parse": 0, "url": imgs[idx], "header": header}
+        # 图集分段：<vid>:<start>:<count> -> pics://
+        start, count = 0, self.CHUNK
+        if ":" in mid:
+            parts = mid.split(":")
+            vid = parts[0]
+            try:
+                start = int(parts[1])
+                count = int(parts[2])
+            except Exception:
+                start, count = 0, self.CHUNK
+        else:
+            vid = mid
+        if vid.startswith("http"):
+            return {"parse": 0, "url": self._proxy_img(vid), "header": header}
+        imgs = self._get_images(vid)
         if not imgs:
-            # 兜底：抓详情 HTML
+            return {"parse": 0, "url": "", "msg": "没有解析到图片"}
+        chunk = imgs[start:start + count] if ":" in mid else imgs[:count]
+        if not chunk:
+            chunk = imgs[:count]
+        return {
+            "parse": 0,
+            "url": "pics://" + "&&".join(chunk),
+            "header": header,
+        }
+
+    def _get_images(self, vid):
+        try:
+            post = self._api_json(f"{self.api}/posts/{vid}")
+            imgs = self._extract_images(post.get("content", {}).get("rendered", "") or "") if post else []
+        except Exception:
+            imgs = []
+        if not imgs:
             try:
                 html = self.fetch(f"{self.host}/?p={vid}")
                 imgs = self._extract_images(html or "")
             except Exception:
                 imgs = []
-        if not imgs:
-            return {"parse": 0, "url": "", "msg": "没有解析到图片"}
-        return {
-            "parse": 0,
-            "url": "pics://" + "&&".join(imgs),
-            "header": {
-                "User-Agent": self.header["User-Agent"],
-                "Referer": self.host + "/",
-            },
-        }
+        return imgs
 
     def isVideoFormat(self, url):
         u = str(url or "")
@@ -191,6 +244,17 @@ class Spider(BaseSpider):
         s = re.sub(r"<[^>]+>", "", s or "")
         return _html.unescape(s).strip()
 
+    def _proxy_img(self, url, cover=False):
+        """Photon 分流：i0-i3 按路径哈希分配；封面 resize 小图，正文图 w=1000。"""
+        m = re.match(r"https://i\d\.wp\.com/(pic\.4khd\.com/.+?\.webp)", url or "")
+        if not m:
+            return url
+        path = m.group(1)
+        sub = sum(path.encode("utf-8")) % 4
+        if cover:
+            return f"https://i{sub}.wp.com/{path}?resize=850%2C1158"
+        return f"https://i{sub}.wp.com/{path}?w=1000"
+
     def _extract_images(self, content):
         imgs = []
         seen = set()
@@ -201,7 +265,7 @@ class Spider(BaseSpider):
             if base in seen:
                 continue
             seen.add(base)
-            imgs.append(base)
+            imgs.append(self._proxy_img(base))
         return imgs
 
     def _get_list(self, url, pg="1"):
@@ -215,10 +279,6 @@ class Spider(BaseSpider):
             if pid in seen:
                 continue
             seen.add(pid)
-            link = ""
-            lm = re.search(r'href="(https://www\.4khd\.com/content/[^"]+)"', body)
-            if lm:
-                link = lm.group(1)
             title = ""
             tm = re.search(r"<h2[^>]*>\s*<a[^>]*>(.*?)</a>\s*</h2>", body, re.S)
             if tm:
@@ -228,7 +288,7 @@ class Spider(BaseSpider):
             pic = ""
             pm = re.search(r'<img[^>]+src="(https://i\d\.wp\.com/[^"]+)"', body)
             if pm:
-                pic = pm.group(1).split("?")[0]
+                pic = self._proxy_img(pm.group(1).split("?")[0], cover=True)
             date = ""
             dm = re.search(r'<time datetime="([^"]+)"', body)
             if dm:
