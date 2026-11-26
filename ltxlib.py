@@ -305,6 +305,12 @@ def _hkdf_sha256(salt, ikm, info, length=32):
 
 # ---------------------------------------------------------------- HTTP
 def _http(method, url, body=None, headers=None, timeout=20):
+    """返回 (status, content_type, body, set_cookie_list)。
+
+    服务器可能在建会话时下发新的 Cookie（浏览器会自动带上，
+    urllib 不会），所以调用方要把 set_cookie_list 存进 jar，
+    下次请求再带上，否则查询接口会 428 说会话不存在。
+    """
     data = None
     hdrs = dict(headers or {})
     if body is not None:
@@ -313,9 +319,14 @@ def _http(method, url, body=None, headers=None, timeout=20):
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.headers.get("Content-Type", ""), resp.read()
+            sc = resp.headers.get_all("Set-Cookie") or []
+            return resp.status, resp.headers.get("Content-Type", ""), resp.read(), sc
     except urllib.error.HTTPError as e:
-        return e.code, e.headers.get("Content-Type", ""), e.read()
+        try:
+            sc = e.headers.get_all("Set-Cookie") or []
+        except Exception:
+            sc = []
+        return e.code, e.headers.get("Content-Type", ""), e.read(), sc
     except Exception:
         raise
 
@@ -330,6 +341,7 @@ class Spider(BaseSpider):
         self._index = None  # {"actors": [...], "makers": [...]}，扫库一次后本会话内缓存
         self._diag = ""  # 诊断用：最近一次失败卡在哪一步，失败时当成一条显示出来
         self._diag_detail = ""  # 诊断详情：点开诊断卡片能看到完整说明
+        self._jar = {}  # 服务器下发的 Cookie（建会话时可能发新的），下次请求要带上
         cfg = {}
         if isinstance(extend, dict):
             cfg = extend
@@ -352,6 +364,15 @@ class Spider(BaseSpider):
                         self._ua = str(t["ua"])
 
     # ------------------------------------------------------------ headers
+    def _store_cookies(self, set_cookies):
+        for sc in (set_cookies or []):
+            first = str(sc).split(";", 1)[0].strip()
+            if "=" in first:
+                name, value = first.split("=", 1)
+                name = name.strip()
+                if name:
+                    self._jar[name] = value.strip()
+
     def _headers(self, extra=None):
         h = {
             "User-Agent": self._ua,
@@ -360,8 +381,16 @@ class Spider(BaseSpider):
             "Accept": "application/json, */*",
             "Accept-Language": "zh-CN,zh;q=0.9",
         }
-        if self._cookie:
-            h["Cookie"] = self._cookie
+        # 票据 + 服务器下发的 Cookie 合并（下发的同名覆盖票据里的）
+        merged = {}
+        for part in str(self._cookie or "").split(";"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                merged[k.strip()] = v.strip()
+        merged.update(self._jar)
+        if merged:
+            h["Cookie"] = "; ".join("%s=%s" % (k, v) for k, v in merged.items())
         if extra:
             h.update(extra)
         return h
@@ -369,10 +398,11 @@ class Spider(BaseSpider):
     # ------------------------------------------------------------ session
     def _new_session(self):
         priv, pub_raw = _ecdh_keypair()
-        status, _ct, raw = _http(
+        status, _ct, raw, _sc = _http(
             "POST", BASE + "/api/crypto/session",
             {"v": 1, "publicKey": _b64u_encode(pub_raw)},
             self._headers(), timeout=20)
+        self._store_cookies(_sc)
         try:
             data = json.loads(raw.decode("utf-8", "replace"))
         except Exception:
@@ -419,7 +449,8 @@ class Spider(BaseSpider):
                 "X-LTX-Session": sess["sid"],
                 "X-LTX-Request": rid,
             })
-            status, ct, raw = _http(method, url, body, headers, timeout=25)
+            status, ct, raw, _sc = _http(method, url, body, headers, timeout=25)
+            self._store_cookies(_sc)
             if status == 428:
                 try:
                     data = json.loads(raw.decode("utf-8", "replace"))
