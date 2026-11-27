@@ -7,8 +7,15 @@ EPORNER (eporner.com) - 免费高清视频站，无需登录，无 Cloudflare
 播放入口直接给 dload 链接 + Referer，播放器跟随 302 到 CDN 直链
 搜索是 POST /search/（字段名 search），301 跳到 /tag/<词>-<hash>/，翻页 /N/
 分类 87 个（/cats/ 动态取，带封面），首页 8 个类：推荐/最佳/评分/4K/1080p/60FPS/VR/类别
-类别用两级浏览：点开类别列出全部 87 个分类，点分类进虚拟详情，第1-5页选集点播最高画质
+类别用两级浏览：点开类别列出全部 86 个分类，点分类进虚拟详情，第1-5页选集点播最高画质
+分类封面取 /cats/ 页 categoriesbox 里的 catimg/<n>.jpg 大图（86 个基本都有）
+注意：不登录只能 720p——站方就这样，详情页的下载链接匿名只有 240/360/480/720，
+标 1080p 的片子详情页也只给到 720p；想试更高画质要在手机浏览器登录 eporner，
+把登录后的 Cookie 放到本地配置该站 ext 里 {"cookie": "..."}，有 Cookie 时
+详情页若出现 1080p/2160p 链接会自动多出对应画质选集（未验证登录是否真的解锁，
+需实测；公开配置里 ext 保持空）
 """
+import json
 import re
 import time
 import urllib.parse
@@ -32,6 +39,7 @@ class Spider(BaseSpider):
         ('fps60', '60FPS', '/cat/60fps/'),
         ('vr', 'VR', '/cat/vr-porn/'),
         ('cats', '类别', 'group:cats'),
+        ('stars', 'PORNSTARS', 'group:stars'),
     ]
     GROUP_PAGES = 5  # 类别虚拟详情里展示前 5 页影片
     PAGE_SIZE = 24   # 类别分组列表每页条数
@@ -42,13 +50,21 @@ class Spider(BaseSpider):
         return 'EPORNER'
 
     def init(self, extend):
-        pass
+        self._cookie = ''
+        try:
+            ext = json.loads(extend) if extend else {}
+            if isinstance(ext, dict):
+                self._cookie = ext.get('cookie', '') or ''
+        except Exception:
+            self._cookie = ''
 
     # ── HTTP ──────────────────────────────────────────────────
     def _http(self, url, data=None, timeout=None):
         """返回 (body_bytes, final_url)；失败返回 (b'', url)"""
         h = {'User-Agent': self.UA, 'Referer': self.HOST + '/',
                'Accept-Language': 'en-US,en;q=0.9'}
+        if getattr(self, '_cookie', ''):
+            h['Cookie'] = self._cookie
         body = b''
         final = url
         if data is not None:
@@ -117,6 +133,25 @@ class Spider(BaseSpider):
                         'vod_remarks': remarks})
         return out
 
+    # ── 女优列表解析 ──────────────────────────────────────────
+    _STAR = re.compile(
+        r'<div class="mbprofile"><a href="/pornstar/([^/"]+)/" title="([^"]+)">.*?'
+        r'<img[^>]+src="([^"]+)"[^>]*>.*?</a>'
+        r'<div class="mbtim"><span>Videos: </span>(\d+)</div>',
+        re.S)
+
+    def _parse_stars(self, html):
+        out, seen = [], set()
+        for slug, name, pic, vids in self._STAR.findall(html):
+            if slug in seen:
+                continue
+            seen.add(slug)
+            out.append({'vod_id': 'stargroup:' + slug,
+                        'vod_name': self._clean(name),
+                        'vod_pic': pic or '',
+                        'vod_remarks': '%s 个视频' % vids})
+        return out
+
     # ── 首页 ──────────────────────────────────────────────────
     def homeContent(self, filter):
         return {'class': [{'type_id': t, 'type_name': n}
@@ -137,8 +172,14 @@ class Spider(BaseSpider):
             return self._cats_cache
         html, _u = self._http(self.HOST + '/cats/')
         html = html.decode('utf-8', 'ignore')
-        # 封面：导航 Popular 区的 listcatbig 条目带 catimg
+        # 封面：/cats/ 页 categoriesbox 块里每个分类都有 catimg/<n>.jpg 大图；
+        # 导航 Popular 区的 listcatbig 只有十来个带图，作为补充
         pics = {}
+        for m in re.finditer(
+                r'<div class="categoriesbox"[^>]*>.*?'
+                r'<a href="/cat/([^/"]+)/"[^>]*>.*?'
+                r'<img src="([^"]+)"', html, re.S):
+            pics.setdefault(m.group(1), m.group(2))
         for m in re.finditer(
                 r'<a[^>]*href="/cat/([^/"]+)/"[^>]*>'
                 r'<img[^>]+?data-src="([^"]+)"', html):
@@ -169,6 +210,12 @@ class Spider(BaseSpider):
             return {'list': out, 'page': pg,
                     'pagecount': max(1, -(-len(cats) // self.PAGE_SIZE)),
                     'limit': 90, 'total': len(cats)}
+        # PORNSTARS 大组：最受欢迎女优榜，按页浏览，每页 68 位（带照片与片量）
+        if tid == 'stars':
+            path = '/pornstar-list/' if pg <= 1 else '/pornstar-list/%d/' % pg
+            html, _u = self._http(self.HOST + path)
+            return {'list': self._parse_stars(html.decode('utf-8', 'ignore')),
+                    'page': pg, 'pagecount': 9999, 'limit': 90, 'total': 999999}
         for t, _n, path in self.SORTS:
             if t == tid and path != 'group:cats':
                 html, _u = self._http(self._list_url(path, pg))
@@ -194,19 +241,31 @@ class Spider(BaseSpider):
 
     def detailContent(self, ids):
         sid = str(ids[0]) if ids else ''
-        # 类别虚拟详情：第1-5页为播放源，每页是该分类的视频选集
-        if sid.startswith('catgroup:'):
-            slug = sid.split(':', 1)[1]
-            name = slug
-            for c in self._categories():
-                if c['slug'] == slug:
-                    name = c['name']
-                    break
+        # 类别 / 女优虚拟详情：第1-5页为播放源，每页是该分类/女优的视频选集
+        if sid.startswith(('catgroup:', 'stargroup:')):
+            kind, slug = sid.split(':', 1)
+            if kind == 'catgroup':
+                base, type_name = '/cat/%s/' % slug, '类别'
+                name = slug
+                for c in self._categories():
+                    if c['slug'] == slug:
+                        name = c['name']
+                        break
+                remarks = '共 %d 个视频分类' % len(self._categories())
+            else:
+                base, type_name = '/pornstar/%s/' % slug, '女优'
+                name, remarks = slug, ''
             play_from, play_url = [], []
             for p in range(1, self.GROUP_PAGES + 1):
-                html, _u = self._http(
-                    self._list_url('/cat/%s/' % slug, p))
-                items = self._parse_list(html.decode('utf-8', 'ignore'))
+                html, _u = self._http(self._list_url(base, p))
+                html = html.decode('utf-8', 'ignore')
+                if kind == 'stargroup' and p == 1:
+                    t = re.search(r'<title>(.*?)</title>', html, re.S)
+                    if t:
+                        name = self._clean(t.group(1)).split(
+                            ' Porn Star Videos')[0].split(
+                            ' Porn Videos')[0] or slug
+                items = self._parse_list(html)
                 if not items:
                     break
                 eps = '#'.join('%s$%s' % (v['vod_name'], v['vod_id'])
@@ -214,8 +273,8 @@ class Spider(BaseSpider):
                 play_from.append('第%d页' % p)
                 play_url.append(eps)
             return {'list': [{'vod_id': sid, 'vod_name': name,
-                              'vod_pic': '', 'type_name': '类别',
-                              'vod_remarks': '共 %d 个视频分类' % len(self._categories()),
+                              'vod_pic': '', 'type_name': type_name,
+                              'vod_remarks': remarks,
                               'vod_play_from': '$$$'.join(play_from),
                               'vod_play_url': '$$$'.join(play_url)}]}
         # 真实视频详情
