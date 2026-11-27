@@ -2,8 +2,9 @@
 """
 WOWXXX.TO (ex WOW.XXX) - 免费高级片聚合站
 Brazzers / Blacked / Team Skeet / MYLF / Adult Time / Tushy / Vixen 等
-全片直链 mp4，多画质 (480p/720p/1080p 以实际为准)，无需登录，无票据
-分类 356 个，片商众多；爬虫取常用分类 + 大片商
+全片直链 mp4，多画质 (480p/720p/1080p/2160p 以实际为准)，无需登录，无票据
+分类 356 个动态取，女优取 /models/ 首页 25 位；片商页站上是空的，改走站内搜索
+封面备注标最高画质（如 2160p · 27:16），片名带 [片商] - 前缀，和站点一致
 """
 import json
 import re
@@ -22,34 +23,21 @@ class Spider(BaseSpider):
     TIMEOUT = 20
 
     # tid -> (name, path)；path 为列表页相对路径，分页在其后加 N/
-    CLASSES = [
+    # 排序 + 片商是固定的；分类（356 个）与女优（/models/ 首页 25 位）
+    # 是动态取的，见 homeContent / _categories / _models
+    SORTS = [
         ('latest', '最新更新', '/latest-updates/'),
         ('popular', '最受欢迎', '/most-popular/'),
         ('week', '本周热门', '/most-popular/week/'),
         ('toprated', '好评最高', '/top-rated/'),
-        ('cat:amateur', 'Amateur', '/categories/amateur/'),
-        ('cat:anal', 'Anal', '/categories/anal/'),
-        ('cat:asian', 'Asian', '/categories/asian/'),
-        ('cat:bbw', 'BBW', '/categories/bbw/'),
-        ('cat:bdsm', 'BDSM', '/categories/bdsm/'),
-        ('cat:big-tits', 'Big Tits', '/categories/big-tits/'),
-        ('cat:blonde', 'Blonde', '/categories/blonde/'),
-        ('cat:brunette', 'Brunette', '/categories/brunette/'),
-        ('cat:creampie', 'Creampie', '/categories/creampie/'),
-        ('cat:ebony', 'Ebony', '/categories/ebony/'),
-        ('cat:hardcore', 'Hardcore', '/categories/hardcore/'),
-        ('cat:interracial', 'Interracial', '/categories/interracial/'),
-        ('cat:lesbian', 'Lesbian', '/categories/lesbian/'),
-        ('cat:mature', 'Mature', '/categories/mature/'),
-        ('cat:milf', 'MILF', '/categories/milf/'),
-        ('cat:pov', 'POV', '/categories/pov/'),
-        ('cat:public', 'Public', '/categories/public/'),
-        ('cat:teen', 'Teen', '/categories/teen/'),
-        ('cat:threesome', 'Threesome', '/categories/threesome/'),
-        # 片商页 /sites/<slug>/ 在站上是空列表，改走站内搜索（站方自己也用
-        # /search/<片商>/ 链片商视频），分页同为 /search/<词>/N/
+    ]
+    # 片商页 /sites/<slug>/ 在站上是空列表，改走站内搜索（站方自己也用
+    # /search/<片商>/ 链片商视频），分页同为 /search/<词>/N/
+    STUDIOS = [
         ('site:brazzers', 'Brazzers', '/search/Brazzers/'),
         ('site:blacked', 'Blacked', '/search/Blacked/'),
+        # BLACKED RAW 的站内片商页本身有内容（不像 Brazzers 是空的），直接用片商页
+        ('site:blacked-raw', 'BLACKED RAW', '/sites/blacked-raw/'),
         ('site:teamskeet', 'Team Skeet', '/search/Team%20Skeet/'),
         ('site:mylf', 'MYLF', '/search/MYLF/'),
         ('site:adult-time', 'Adult Time', '/search/Adult%20Time/'),
@@ -59,6 +47,21 @@ class Spider(BaseSpider):
         ('site:pure-taboo', 'Pure Taboo', '/search/Pure%20Taboo/'),
         ('site:new-sensations', 'New Sensations', '/search/New%20Sensations/'),
     ]
+    # 常用分类（仅作动态取不到时的兜底）
+    STATIC_CATS = [
+        ('cat:amateur', 'Amateur'), ('cat:anal', 'Anal'),
+        ('cat:asian', 'Asian'), ('cat:bbw', 'BBW'),
+        ('cat:bdsm', 'BDSM'), ('cat:big-tits', 'Big Tits'),
+        ('cat:blonde', 'Blonde'), ('cat:brunette', 'Brunette'),
+        ('cat:creampie', 'Creampie'), ('cat:ebony', 'Ebony'),
+        ('cat:hardcore', 'Hardcore'), ('cat:interracial', 'Interracial'),
+        ('cat:lesbian', 'Lesbian'), ('cat:mature', 'Mature'),
+        ('cat:milf', 'MILF'), ('cat:pov', 'POV'),
+        ('cat:public', 'Public'), ('cat:teen', 'Teen'),
+        ('cat:threesome', 'Threesome'),
+    ]
+    _cats_cache = None
+    _models_cache = None
 
     def getName(self):
         return 'WOWXXX'
@@ -159,8 +162,60 @@ class Spider(BaseSpider):
         return self.HOST + path
 
     def homeContent(self, filter):
-        cats = [{'type_id': t, 'type_name': n} for t, n, _ in self.CLASSES]
+        cats = [{'type_id': t, 'type_name': n} for t, n, _ in self.SORTS]
+        cats += [{'type_id': t, 'type_name': n} for t, n, _ in self.STUDIOS]
+        for slug, name in self._models():
+            cats.append({'type_id': 'model:' + slug, 'type_name': name})
+        for slug, name in self._categories():
+            cats.append({'type_id': 'cat:' + slug, 'type_name': name})
         return {'class': cats}
+
+    def _categories(self):
+        # 站上全部 356 个分类，动态取，每次会话只取一次；取不到用常用分类兜底
+        if Spider._cats_cache is not None:
+            return Spider._cats_cache
+        cats = []
+        try:
+            html = self._http(self.HOST + '/categories/').decode(
+                'utf-8', 'ignore')
+            seen = set()
+            for slug, inner in re.findall(
+                    r'href="https?://www\.wowxxx\.to/categories/([^/"]+)/"'
+                    r'[^>]*>(.*?)</a>', html, re.S):
+                name = self._clean(inner)
+                if slug and name and slug not in seen:
+                    seen.add(slug)
+                    cats.append((slug, name))
+        except Exception:
+            cats = []
+        if not cats:
+            cats = [(t[4:], n) for t, n in self.STATIC_CATS]
+        Spider._cats_cache = cats
+        return cats
+
+    def _models(self):
+        # 女优（Pornstars）：/models/ 首页 25 位，名字前的数字是片量，去掉；
+        # 站上女优有上万位，不全加，只取首页这 25 位
+        if Spider._models_cache is not None:
+            return Spider._models_cache
+        models = []
+        try:
+            html = self._http(self.HOST + '/models/').decode(
+                'utf-8', 'ignore')
+            seen = set()
+            for slug, inner in re.findall(
+                    r'href="https?://www\.wowxxx\.to/models/([^/"]+)/"'
+                    r'[^>]*>(.*?)</a>', html, re.S):
+                if not slug or slug.isdigit() or slug in seen:
+                    continue
+                name = re.sub(r'^\d+\s*', '', self._clean(inner))
+                if name:
+                    seen.add(slug)
+                    models.append((slug, name))
+        except Exception:
+            models = []
+        Spider._models_cache = models
+        return models
 
     def homeVideoContent(self):
         html = self._http(self.HOST + '/latest-updates/').decode(
@@ -169,10 +224,14 @@ class Spider(BaseSpider):
 
     def categoryContent(self, tid, pg, filter, extend):
         path = None
-        for t, _, p in self.CLASSES:
+        for t, _, p in self.SORTS + self.STUDIOS:
             if t == tid:
                 path = p
                 break
+        if path is None and tid.startswith('cat:'):
+            path = '/categories/%s/' % tid[4:]
+        elif path is None and tid.startswith('model:'):
+            path = '/models/%s/' % tid[6:]
         if path is None:
             return {'list': []}
         html = self._http(self._list_url(path, pg)).decode('utf-8', 'ignore')
