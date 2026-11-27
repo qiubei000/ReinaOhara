@@ -307,6 +307,15 @@
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1
+    },
+    {
+      "key": "wowxxx.py",
+      "name": "WOWXXX",
+      "type": 3,
+      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/wowxxx.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
     }
   ]
 }
