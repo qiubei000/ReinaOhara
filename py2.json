@@ -253,6 +253,42 @@
       "quickSearch": 1,
       "filterable": 1,
       "ext": ""
+    },
+    {
+      "key": "haijiao.py",
+      "name": "海角社区",
+      "type": 3,
+      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/haijiao.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "javhd.py",
+      "name": "JAVHD",
+      "type": 3,
+      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/javhd.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "caoliu.py",
+      "name": "草榴社区",
+      "type": 3,
+      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/caoliu.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
+      "key": "juhe.py",
+      "name": "亚洲合集",
+      "type": 3,
+      "api": "https://gh-proxy.org/https://raw.githubusercontent.com/qiubei000/ReinaOhara/main/juhe.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
     }
   ]
 }
