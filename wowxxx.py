@@ -3,7 +3,8 @@
 WOWXXX.TO (ex WOW.XXX) - 免费高级片聚合站
 Brazzers / Blacked / Team Skeet / MYLF / Adult Time / Tushy / Vixen 等
 全片直链 mp4，多画质 (480p/720p/1080p/2160p 以实际为准)，无需登录，无票据
-分类 356 个动态取，女优取 /models/ 首页 25 位；片商页站上是空的，改走站内搜索
+分类 356 个动态取，女优取 /models/ 前 10 页共 250 位（站上共 880 页约 2.2 万位，
+全加分类栏会卡死；其他女优直接搜名字，站内搜索按女优匹配）；片商页站上是空的，改走站内搜索
 封面备注标最高画质（如 2160p · 27:16），片名带 [片商] - 前缀，和站点一致
 """
 import json
@@ -62,6 +63,7 @@ class Spider(BaseSpider):
     ]
     _cats_cache = None
     _models_cache = None
+    MODEL_PAGES = 10  # 女优取 /models/ 前 10 页 = 250 位
 
     def getName(self):
         return 'WOWXXX'
@@ -194,24 +196,36 @@ class Spider(BaseSpider):
         return cats
 
     def _models(self):
-        # 女优（Pornstars）：/models/ 首页 25 位，名字前的数字是片量，去掉；
-        # 站上女优有上万位，不全加，只取首页这 25 位
+        # 女优（Pornstars）：/models/ 前 MODEL_PAGES 页（每页 25 位），并行取；
+        # 站上女优共 880 页约 2.2 万位，全加进分类栏 FongMi 会卡死，只取最热门的前 250 位
+        # （第 10 页仍有 Eva Elfie、Brooklyn Chase、Aidra Fox 这类热门女优）；
+        # 想找其他的女优直接搜名字，站内搜索按女优匹配
         if Spider._models_cache is not None:
             return Spider._models_cache
         models = []
         try:
-            html = self._http(self.HOST + '/models/').decode(
-                'utf-8', 'ignore')
+            def _one(pg):
+                html = self._http(self.HOST + '/models/'
+                                  + ('%d/' % pg if pg > 1 else '')).decode(
+                                      'utf-8', 'ignore')
+                out = []
+                for slug, inner in re.findall(
+                        r'href="https?://www\.wowxxx\.to/models/([^/"]+)/"'
+                        r'[^>]*>(.*?)</a>', html, re.S):
+                    if not slug or slug.isdigit():
+                        continue
+                    name = re.sub(r'^\d+\s*', '', self._clean(inner))
+                    if name:
+                        out.append((slug, name))
+                return out
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                pages = list(ex.map(_one, range(1, self.MODEL_PAGES + 1)))
             seen = set()
-            for slug, inner in re.findall(
-                    r'href="https?://www\.wowxxx\.to/models/([^/"]+)/"'
-                    r'[^>]*>(.*?)</a>', html, re.S):
-                if not slug or slug.isdigit() or slug in seen:
-                    continue
-                name = re.sub(r'^\d+\s*', '', self._clean(inner))
-                if name:
-                    seen.add(slug)
-                    models.append((slug, name))
+            for page in pages:
+                for slug, name in page:
+                    if slug not in seen:
+                        seen.add(slug)
+                        models.append((slug, name))
         except Exception:
             models = []
         Spider._models_cache = models
