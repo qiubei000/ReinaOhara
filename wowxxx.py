@@ -3,10 +3,12 @@
 WOWXXX.TO (ex WOW.XXX) - 免费高级片聚合站
 Brazzers / Blacked / Team Skeet / MYLF / Adult Time / Tushy / Vixen 等
 全片直链 mp4，多画质 (480p/720p/1080p/2160p 以实际为准)，无需登录，无票据
-两级浏览：首页 7 个类（4 个排序 + 片商/女优/类别）；点开片商列出站上真正的片商
-（/sites/ 索引动态取，如 Tushy、New Sensations、Girlsway 等 20 多个，带片量），
+混合浏览（DRAFT，未推，等她选）：首页 19 个类 = 4 个排序 + 13 个真片商
+（/sites/ 索引动态取，BLACKED RAW + 12 个带片量的）+ 女优 / 类别两个大组；
+点开片商就是带封面的视频列表（封面 + 画质备注，可翻页，不限 5 页），
 点开女优列出 250 位女优（带照片与片量，分页），点开类别列出全部 356 个分类（分页）；
-点开某个片商/女优/类别，详情页以“第1页…第5页”为播放源、每页 24 条选集，点选集直接播最高画质
+点开某个女优/类别，详情页以“第1页…第5页”为播放源、每页 24 条选集，点选集直接播最高画质
+（详情页选集只能是文字，FongMi 详情页没有给选集配封面的字段，所以片商改回平铺列表才能有封面）
 注意：Brazzers/Blacked/Team Skeet 等大牌并不在站上（片商页是空的，搜到的片子没有直链、播不了），
 所以片商只列站上真实有的；BLACKED RAW 虽不在索引里但有片能播，手动保留
 分类 356 个动态取，女优取 /models/ 前 10 页共 250 位（站上共 880 页约 2.2 万位，
@@ -180,11 +182,13 @@ class Spider(BaseSpider):
         return self.HOST + path
 
     def homeContent(self, filter):
-        # 两级浏览：首页只有 7 个类（4 个排序 + 3 个大分类）；
-        # 点开片商/女优/类别，在分类页里列出全部子项（见 categoryContent）
+        # 混合浏览：4 个排序 + 13 个真片商平铺（点开是带封面的视频列表，
+        # 因为详情页选集只能是文字、配不了封面）+ 女优 / 类别两个大组；
+        # 女优、类别仍走两级（见 categoryContent 的 group: 分支）
         cats = [{'type_id': t, 'type_name': n} for t, n, _ in self.SORTS]
-        cats += [{'type_id': 'group:studios', 'type_name': '片商'},
-                 {'type_id': 'group:models', 'type_name': '女优'},
+        for slug, name, _c in self._studios():
+            cats.append({'type_id': 'site:' + slug, 'type_name': name})
+        cats += [{'type_id': 'group:models', 'type_name': '女优'},
                  {'type_id': 'group:cats', 'type_name': '类别'}]
         return {'class': cats}
 
