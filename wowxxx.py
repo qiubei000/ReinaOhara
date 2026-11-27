@@ -164,12 +164,16 @@ class Spider(BaseSpider):
         return self.HOST + path
 
     def homeContent(self, filter):
+        # 大分类分组：排序（4 个）+ 片商· + 女优· + 类别·，前缀分组方便在分类栏里找
         cats = [{'type_id': t, 'type_name': n} for t, n, _ in self.SORTS]
-        cats += [{'type_id': t, 'type_name': n} for t, n, _ in self.STUDIOS]
+        cats += [{'type_id': t, 'type_name': '片商·' + n}
+                 for t, n, _ in self.STUDIOS]
         for slug, name in self._models():
-            cats.append({'type_id': 'model:' + slug, 'type_name': name})
+            cats.append({'type_id': 'model:' + slug,
+                         'type_name': '女优·' + name})
         for slug, name in self._categories():
-            cats.append({'type_id': 'cat:' + slug, 'type_name': name})
+            cats.append({'type_id': 'cat:' + slug,
+                         'type_name': '类别·' + name})
         return {'class': cats}
 
     def _categories(self):
