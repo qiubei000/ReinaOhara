@@ -5,6 +5,9 @@ EPORNER (eporner.com) - 免费高清视频站，无需登录，无 Cloudflare
 列表页：首页 65 条（39 + 26 hdy），分类页约 59 条/页，分页 /N/
 详情页 dload 链接含全部画质（240/360/480/720/1080/2160，以实际为准），
 播放入口直接给 dload 链接 + Referer，播放器跟随 302 到 CDN 直链
+实测 FongMi 播放器跟 dload 跳转有问题（报 Container Unsupported），
+所以 playerContent 里先用 Range 请求跟完 302，拿到最终 CDN 直链再交给播放器；
+解析失败时回退到 dload 链接本身
 搜索是 POST /search/（字段名 search），301 跳到 /tag/<词>-<hash>/，翻页 /N/
 分类 87 个（/cats/ 动态取，带封面），首页 8 个类：推荐/最佳/评分/4K/1080p/60FPS/VR/类别
 类别用两级浏览：点开类别列出全部 86 个分类，点分类进虚拟详情，第1-5页选集点播最高画质
@@ -12,8 +15,8 @@ EPORNER (eporner.com) - 免费高清视频站，无需登录，无 Cloudflare
 注意：不登录只能 720p——站方就这样，详情页的下载链接匿名只有 240/360/480/720，
 标 1080p 的片子详情页也只给到 720p；想试更高画质要在手机浏览器登录 eporner，
 把登录后的 Cookie 放到本地配置该站 ext 里 {"cookie": "..."}，有 Cookie 时
-详情页若出现 1080p/2160p 链接会自动多出对应画质选集（未验证登录是否真的解锁，
-需实测；公开配置里 ext 保持空）
+详情页若出现 1080p/2160p 链接会自动多出对应画质选集（她 2026-11-27 实测：
+登录后出现了 1440p/1080p 选集，确认解锁；公开配置里 ext 保持空）
 """
 import json
 import re
@@ -294,7 +297,9 @@ class Spider(BaseSpider):
         m = re.search(r'duration" content="(\d+)"', html)
         if m:
             dur = self._fmt_dur(m.group(1))
-        ups = re.findall(r'href="/profile/[^"]+"[^>]*>([^<]+)</a>', html)
+        ups = [u for u in
+               re.findall(r'href="/profile/[^"]+"[^>]*>([^<]+)</a>', html)
+               if self._clean(u) and self._clean(u) != 'My profile']
         tags = [self._clean(t) for t in
                 re.findall(r'href="/tag/[^"]+"[^>]*>([^<]+)</a>', html)]
         # 详情页标签里混着标题拆出来的单个词（About/After 这类），只留词组
@@ -331,6 +336,29 @@ class Spider(BaseSpider):
                 'page': pg, 'pagecount': 9999, 'limit': 90, 'total': 999999}
 
     # ── 播放 ──────────────────────────────────────────────────
+    def _resolve_play(self, url, referer):
+        """跟完 dload 的 302 跳转，拿最终 CDN 直链（FongMi 播放器自己跟
+        跳转会报 Container Unsupported）；失败返回 ''，调用方回退原链接"""
+        h = {'User-Agent': self.UA, 'Referer': referer,
+             'Range': 'bytes=0-0'}
+        if getattr(self, '_cookie', ''):
+            h['Cookie'] = self._cookie
+        try:
+            req = urllib.request.Request(url, headers=h, method='GET')
+            with urllib.request.urlopen(req, timeout=self.TIMEOUT) as resp:
+                final = resp.geturl()
+            if '.mp4' in final:
+                return final
+        except Exception:
+            pass
+        return ''
+
+    def _play_result(self, code, url):
+        direct = self._resolve_play(url, self._detail_url(code))
+        return {'parse': 0, 'url': direct or url,
+                'header': {'User-Agent': self.UA,
+                           'Referer': self._detail_url(code)}}
+
     def playerContent(self, flag, id, vipFlags):
         sid = str(id or '')
         # 画质选集：play@@<code>@@<q>@@<vid>，dload 链接现取现跳转，不用重取详情页
@@ -338,9 +366,7 @@ class Spider(BaseSpider):
         if m:
             code, q, vid = m.groups()
             url = '%s/dload/%s/%s/%s-%sp.mp4' % (self.HOST, code, q, vid, q)
-            return {'parse': 0, 'url': url,
-                    'header': {'User-Agent': self.UA,
-                               'Referer': self._detail_url(code)}}
+            return self._play_result(code, url)
         # 类别选集：video:<code>，取详情页最高画质直链
         m2 = re.match(r'video:([^@]+)$', sid)
         if m2:
@@ -350,9 +376,7 @@ class Spider(BaseSpider):
             if dloads:
                 q, (c, v) = dloads[0]
                 url = '%s/dload/%s/%s/%s-%sp.mp4' % (self.HOST, c, q, v, q)
-                return {'parse': 0, 'url': url,
-                        'header': {'User-Agent': self.UA,
-                                   'Referer': self._detail_url(code)}}
+                return self._play_result(code, url)
         return {'parse': 0, 'url': ''}
 
     def isVideoFormat(self, url):
