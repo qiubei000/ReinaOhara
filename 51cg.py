@@ -153,11 +153,13 @@ class Spider(BaseSpider):
         return {'class': [{'type_id': t, 'type_name': n} for t, n, _ in self.CATS]}
 
     def homeVideoContent(self):
-        html, _ = self._http('/')
-        items = self._parse_list(html)
-        if not items:
-            return {'list': self._diag_item('homeVideoContent /')}
-        return {'list': items}
+        # 纯测试：不联网，直接返回一张测试卡
+        return {'list': [self._test_card('homeVideoContent')]}
+
+    def _test_card(self, where):
+        return {'vod_id': 'diag', 'vod_name': '测试卡：能看到我吗',
+                'vod_pic': 'https://pic.ksfwni.cn/upload_01/xiao/20261127/2026112711385722497.jpeg',
+                'vod_remarks': '点开看说明'}
 
     def _list_path(self, tid, pg):
         for t, _, path in self.CATS:
@@ -170,13 +172,9 @@ class Spider(BaseSpider):
         return '/'
 
     def categoryContent(self, tid, pg, filter, extend):
-        html, _ = self._http(self._list_path(tid, pg))
-        items = self._parse_list(html)
-        if not items:
-            return {'list': self._diag_item('categoryContent %s p%d' % (tid, pg)),
-                    'page': pg, 'pagecount': 1, 'limit': 90, 'total': 1}
-        return {'list': items, 'page': pg,
-                'pagecount': 9999, 'limit': 90, 'total': 999999}
+        # 纯测试：不联网，直接返回一张测试卡
+        return {'list': [self._test_card('categoryContent %s p%d' % (tid, pg))],
+                'page': pg, 'pagecount': 1, 'limit': 90, 'total': 1}
 
     def searchContent(self, key, quick, pg):
         q = urllib.parse.quote(key)
@@ -259,7 +257,7 @@ class Spider(BaseSpider):
     def detailContent(self, ids):
         if ids[0] == 'diag':
             return {'list': [{'vod_id': 'diag', 'vod_name': '诊断结果',
-                              'vod_content': _DIAG.get('text', '无诊断信息'),
+                              'vod_content': '如果你能看到这张卡，说明新代码已经加载，问题在拉取网站那一步；如果看不到，说明 FongMi 还在用旧文件。',
                               'vod_play_from': '诊断',
                               'vod_play_url': '说明$diagplay'}]}
         pid = ids[0].split(':', 1)[1] if ':' in ids[0] else ids[0]
