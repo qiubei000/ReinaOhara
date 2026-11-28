@@ -11,6 +11,8 @@ m3u8 是 AES-128 加密（EXT-X-KEY），FongMi 播放器原生支持；auth_key
 镜像多，HOSTS 按顺序回退：51cg1.com（海外）-> 51cg61.cc -> t0.51cg61.cc
 """
 import re
+import threading
+import time
 import urllib.parse
 import urllib.request
 
@@ -24,7 +26,9 @@ class Spider(BaseSpider):
     HOSTS = ['https://51cg1.com', 'https://www.51cg61.cc', 'https://t0.51cg61.cc']
     UA = ('Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 '
           '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36')
-    TIMEOUT = 8
+    TIMEOUT = 5
+    # 单次列表调用最多花的时间（秒），超过就停下返回诊断，不能让壳子先杀掉调用
+    DEADLINE = 9
 
     CATS = [
         ('home', '首页推荐', '/'),
@@ -62,29 +66,64 @@ class Spider(BaseSpider):
         pass
 
     # ── HTTP ──────────────────────────────────────────────────
+    def _fetch_timed(self, url, timeout):
+        """在子线程里调 self.fetch，超时就放弃（壳子的 fetch 内部超时不可控，
+        直接调会在挂起的连接上卡住整个列表调用）。返回 (body, err)。"""
+        box = {}
+
+        def run():
+            try:
+                box['v'] = self.fetch(url)
+            except Exception as e:
+                box['e'] = e
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(timeout)
+        if t.is_alive():
+            return None, 'timeout'
+        if 'e' in box:
+            return None, box['e']
+        return box.get('v'), None
+
     def _http(self, path):
         """按 HOSTS 顺序回退；返回 (html, host)；失败返回 ('', HOSTS[0])
 
         先用壳子自带的 self.fetch（走壳子自己的网络栈），再用 urllib 兜底。
-        urllib 在 FongMi 里连不上这几个站（会一直挂起），所以 fetch 优先。
+        全程有总时限：超过 DEADLINE 秒就停下，保证调用能返回诊断而不是被壳子杀掉。
         """
         if path.startswith('http'):
             urls = [path]
         else:
             urls = [h + path for h in self.HOSTS]
         notes = []
+        start = time.monotonic()
         for url in urls:
-            # 1) 壳子 fetch
+            if time.monotonic() - start > self.DEADLINE:
+                notes.append('超过 %ds 总时限，停止尝试' % self.DEADLINE)
+                break
+            # 1) 壳子 fetch（子线程 + 超时，挂起也不卡住调用）
             try:
-                body = self.fetch(url)
+                left = max(1.0, self.DEADLINE - (time.monotonic() - start))
+                body, ferr = self._fetch_timed(url, min(4.0, left))
+                if ferr == 'timeout':
+                    notes.append('%s: fetch 超时' % url)
+                elif isinstance(ferr, Exception):
+                    raise ferr
+                elif isinstance(body, bytes):
+                    body = body.decode('utf-8', 'ignore')
                 if body:
                     host = re.match(r'(https?://[^/]+)', url).group(1)
                     notes.append('%s: fetch OK, %d bytes' % (url, len(body)))
                     _DIAG['fetch'] = ' | '.join(notes)
                     return body, host
-                notes.append('%s: fetch 空' % url)
+                if ferr is None:
+                    notes.append('%s: fetch 空' % url)
             except Exception as e:
                 notes.append('%s: fetch %s: %s' % (url, type(e).__name__, str(e)[:120]))
+            if time.monotonic() - start > self.DEADLINE:
+                notes.append('超过 %ds 总时限，停止尝试' % self.DEADLINE)
+                break
             # 2) urllib 兜底
             try:
                 req = urllib.request.Request(url, headers={
@@ -93,7 +132,8 @@ class Spider(BaseSpider):
                     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                     'Referer': self.HOSTS[0] + '/',
                 })
-                with urllib.request.urlopen(req, timeout=self.TIMEOUT) as r:
+                left = max(1, int(self.DEADLINE - (time.monotonic() - start)))
+                with urllib.request.urlopen(req, timeout=min(self.TIMEOUT, left)) as r:
                     if r.status == 200:
                         body = r.read().decode('utf-8', 'ignore')
                         host = re.match(r'(https?://[^/]+)', url).group(1)
@@ -128,6 +168,11 @@ class Spider(BaseSpider):
     def _parse_list(self, html):
         items = []
         seen = set()
+        if isinstance(html, bytes):
+            html = html.decode('utf-8', 'ignore')
+        if not isinstance(html, str):
+            _DIAG['parse'] = '页面不是文本：%s' % type(html).__name__
+            return items
         arts = re.findall(r'<article.*?</article>', html, re.S)
         for art in arts:
             m = re.search(r'href="/archives/(\d+)/"', art)
@@ -169,8 +214,12 @@ class Spider(BaseSpider):
         return {'class': [{'type_id': t, 'type_name': n} for t, n, _ in self.CATS]}
 
     def homeVideoContent(self):
-        html, _ = self._http('/')
-        items = self._parse_list(html)
+        try:
+            html, _ = self._http('/')
+            items = self._parse_list(html)
+        except Exception as e:
+            _DIAG['parse'] = 'homeVideoContent 异常：%s: %s' % (type(e).__name__, str(e)[:200])
+            return {'list': self._diag_item('homeVideoContent /')}
         if not items:
             return {'list': self._diag_item('homeVideoContent /')}
         return {'list': items}
@@ -186,8 +235,13 @@ class Spider(BaseSpider):
         return '/'
 
     def categoryContent(self, tid, pg, filter, extend):
-        html, _ = self._http(self._list_path(tid, pg))
-        items = self._parse_list(html)
+        try:
+            html, _ = self._http(self._list_path(tid, pg))
+            items = self._parse_list(html)
+        except Exception as e:
+            _DIAG['parse'] = 'categoryContent 异常：%s: %s' % (type(e).__name__, str(e)[:200])
+            return {'list': self._diag_item('categoryContent %s p%d' % (tid, pg)),
+                    'page': pg, 'pagecount': 1, 'limit': 90, 'total': 1}
         if not items:
             return {'list': self._diag_item('categoryContent %s p%d' % (tid, pg)),
                     'page': pg, 'pagecount': 1, 'limit': 90, 'total': 1}
@@ -195,10 +249,19 @@ class Spider(BaseSpider):
                 'pagecount': 9999, 'limit': 90, 'total': 999999}
 
     def searchContent(self, key, quick, pg):
-        q = urllib.parse.quote(key)
-        path = '/search/%s/' % q if pg <= 1 else '/search/%s/%d/' % (q, pg)
-        html, _ = self._http(path)
-        return {'list': self._parse_list(html), 'page': pg,
+        try:
+            q = urllib.parse.quote(key)
+            path = '/search/%s/' % q if pg <= 1 else '/search/%s/%d/' % (q, pg)
+            html, _ = self._http(path)
+            items = self._parse_list(html)
+        except Exception as e:
+            _DIAG['parse'] = 'searchContent 异常：%s: %s' % (type(e).__name__, str(e)[:200])
+            return {'list': self._diag_item('searchContent %s' % key), 'page': pg,
+                    'pagecount': 1, 'limit': 90, 'total': 1}
+        if not items:
+            return {'list': self._diag_item('searchContent %s' % key), 'page': pg,
+                    'pagecount': 1, 'limit': 90, 'total': 1}
+        return {'list': items, 'page': pg,
                 'pagecount': 9999, 'limit': 90, 'total': 999999}
 
     # ── 详情 ──────────────────────────────────────────────────
