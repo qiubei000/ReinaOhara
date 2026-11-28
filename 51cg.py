@@ -16,7 +16,7 @@ import urllib.request
 
 from base.spider import Spider as BaseSpider
 
-# 诊断版：列表为空时返回一张诊断卡，点开看失败原因；修好后换回正常版
+# 诊断用：最近一次失败记录，列表为空时当成一张卡显示出来
 _DIAG = {'fetch': '', 'parse': ''}
 
 
@@ -63,13 +63,29 @@ class Spider(BaseSpider):
 
     # ── HTTP ──────────────────────────────────────────────────
     def _http(self, path):
-        """按 HOSTS 顺序回退；返回 (html, host)；失败返回 ('', HOSTS[0])"""
+        """按 HOSTS 顺序回退；返回 (html, host)；失败返回 ('', HOSTS[0])
+
+        先用壳子自带的 self.fetch（走壳子自己的网络栈），再用 urllib 兜底。
+        urllib 在 FongMi 里连不上这几个站（会一直挂起），所以 fetch 优先。
+        """
         if path.startswith('http'):
             urls = [path]
         else:
             urls = [h + path for h in self.HOSTS]
         notes = []
         for url in urls:
+            # 1) 壳子 fetch
+            try:
+                body = self.fetch(url)
+                if body:
+                    host = re.match(r'(https?://[^/]+)', url).group(1)
+                    notes.append('%s: fetch OK, %d bytes' % (url, len(body)))
+                    _DIAG['fetch'] = ' | '.join(notes)
+                    return body, host
+                notes.append('%s: fetch 空' % url)
+            except Exception as e:
+                notes.append('%s: fetch %s: %s' % (url, type(e).__name__, str(e)[:120]))
+            # 2) urllib 兜底
             try:
                 req = urllib.request.Request(url, headers={
                     'User-Agent': self.UA,
@@ -81,12 +97,12 @@ class Spider(BaseSpider):
                     if r.status == 200:
                         body = r.read().decode('utf-8', 'ignore')
                         host = re.match(r'(https?://[^/]+)', url).group(1)
-                        notes.append('%s: HTTP 200, %d bytes' % (url, len(body)))
+                        notes.append('%s: urllib 200, %d bytes' % (url, len(body)))
                         _DIAG['fetch'] = ' | '.join(notes)
                         return body, host
-                    notes.append('%s: HTTP %s' % (url, r.status))
+                    notes.append('%s: urllib HTTP %s' % (url, r.status))
             except Exception as e:
-                notes.append('%s: %s: %s' % (url, type(e).__name__, str(e)[:200]))
+                notes.append('%s: urllib %s: %s' % (url, type(e).__name__, str(e)[:120]))
         _DIAG['fetch'] = ' | '.join(notes)
         return '', self.HOSTS[0]
 
@@ -153,13 +169,11 @@ class Spider(BaseSpider):
         return {'class': [{'type_id': t, 'type_name': n} for t, n, _ in self.CATS]}
 
     def homeVideoContent(self):
-        # 纯测试：不联网，直接返回一张测试卡
-        return {'list': [self._test_card('homeVideoContent')]}
-
-    def _test_card(self, where):
-        return {'vod_id': 'diag', 'vod_name': '测试卡：能看到我吗',
-                'vod_pic': 'https://pic.ksfwni.cn/upload_01/xiao/20261127/2026112711385722497.jpeg',
-                'vod_remarks': '点开看说明'}
+        html, _ = self._http('/')
+        items = self._parse_list(html)
+        if not items:
+            return {'list': self._diag_item('homeVideoContent /')}
+        return {'list': items}
 
     def _list_path(self, tid, pg):
         for t, _, path in self.CATS:
@@ -172,9 +186,13 @@ class Spider(BaseSpider):
         return '/'
 
     def categoryContent(self, tid, pg, filter, extend):
-        # 纯测试：不联网，直接返回一张测试卡
-        return {'list': [self._test_card('categoryContent %s p%d' % (tid, pg))],
-                'page': pg, 'pagecount': 1, 'limit': 90, 'total': 1}
+        html, _ = self._http(self._list_path(tid, pg))
+        items = self._parse_list(html)
+        if not items:
+            return {'list': self._diag_item('categoryContent %s p%d' % (tid, pg)),
+                    'page': pg, 'pagecount': 1, 'limit': 90, 'total': 1}
+        return {'list': items, 'page': pg,
+                'pagecount': 9999, 'limit': 90, 'total': 999999}
 
     def searchContent(self, key, quick, pg):
         q = urllib.parse.quote(key)
@@ -257,7 +275,7 @@ class Spider(BaseSpider):
     def detailContent(self, ids):
         if ids[0] == 'diag':
             return {'list': [{'vod_id': 'diag', 'vod_name': '诊断结果',
-                              'vod_content': '如果你能看到这张卡，说明新代码已经加载，问题在拉取网站那一步；如果看不到，说明 FongMi 还在用旧文件。',
+                              'vod_content': _DIAG.get('text', '无诊断信息'),
                               'vod_play_from': '诊断',
                               'vod_play_url': '说明$diagplay'}]}
         pid = ids[0].split(':', 1)[1] if ':' in ids[0] else ids[0]
