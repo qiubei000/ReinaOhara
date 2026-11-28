@@ -16,6 +16,9 @@ import urllib.request
 
 from base.spider import Spider as BaseSpider
 
+# 诊断版：列表为空时返回一张诊断卡，点开看失败原因；修好后换回正常版
+_DIAG = {'fetch': '', 'parse': ''}
+
 
 class Spider(BaseSpider):
     HOSTS = ['https://51cg1.com', 'https://www.51cg61.cc', 'https://t0.51cg61.cc']
@@ -65,6 +68,7 @@ class Spider(BaseSpider):
             urls = [path]
         else:
             urls = [h + path for h in self.HOSTS]
+        notes = []
         for url in urls:
             try:
                 req = urllib.request.Request(url, headers={
@@ -77,10 +81,22 @@ class Spider(BaseSpider):
                     if r.status == 200:
                         body = r.read().decode('utf-8', 'ignore')
                         host = re.match(r'(https?://[^/]+)', url).group(1)
+                        notes.append('%s: HTTP 200, %d bytes' % (url, len(body)))
+                        _DIAG['fetch'] = ' | '.join(notes)
                         return body, host
-            except Exception:
-                continue
+                    notes.append('%s: HTTP %s' % (url, r.status))
+            except Exception as e:
+                notes.append('%s: %s: %s' % (url, type(e).__name__, str(e)[:200]))
+        _DIAG['fetch'] = ' | '.join(notes)
         return '', self.HOSTS[0]
+
+    def _diag_item(self, where):
+        txt = '位置: %s\n拉取: %s\n解析: %s' % (where, _DIAG.get('fetch', ''),
+                                             _DIAG.get('parse', ''))
+        _DIAG['text'] = txt
+        short = _DIAG.get('fetch', '')[:60]
+        return [{'vod_id': 'diag', 'vod_name': '诊断：列表为空（点开看原因）',
+                 'vod_pic': '', 'vod_remarks': short}]
 
     @staticmethod
     def _clean(s):
@@ -96,7 +112,8 @@ class Spider(BaseSpider):
     def _parse_list(self, html):
         items = []
         seen = set()
-        for art in re.findall(r'<article.*?</article>', html, re.S):
+        arts = re.findall(r'<article.*?</article>', html, re.S)
+        for art in arts:
             m = re.search(r'href="/archives/(\d+)/"', art)
             if not m:
                 continue
@@ -128,6 +145,8 @@ class Spider(BaseSpider):
                 'vod_pic': pic,
                 'vod_remarks': remarks,
             })
+        _DIAG['parse'] = 'html %d bytes, article %d 个, 解析出 %d 条' % (
+            len(html), len(arts), len(items))
         return items
 
     def homeContent(self, filter):
@@ -135,7 +154,10 @@ class Spider(BaseSpider):
 
     def homeVideoContent(self):
         html, _ = self._http('/')
-        return {'list': self._parse_list(html)}
+        items = self._parse_list(html)
+        if not items:
+            return {'list': self._diag_item('homeVideoContent /')}
+        return {'list': items}
 
     def _list_path(self, tid, pg):
         for t, _, path in self.CATS:
@@ -149,7 +171,11 @@ class Spider(BaseSpider):
 
     def categoryContent(self, tid, pg, filter, extend):
         html, _ = self._http(self._list_path(tid, pg))
-        return {'list': self._parse_list(html), 'page': pg,
+        items = self._parse_list(html)
+        if not items:
+            return {'list': self._diag_item('categoryContent %s p%d' % (tid, pg)),
+                    'page': pg, 'pagecount': 1, 'limit': 90, 'total': 1}
+        return {'list': items, 'page': pg,
                 'pagecount': 9999, 'limit': 90, 'total': 999999}
 
     def searchContent(self, key, quick, pg):
@@ -231,6 +257,11 @@ class Spider(BaseSpider):
         return imgs
 
     def detailContent(self, ids):
+        if ids[0] == 'diag':
+            return {'list': [{'vod_id': 'diag', 'vod_name': '诊断结果',
+                              'vod_content': _DIAG.get('text', '无诊断信息'),
+                              'vod_play_from': '诊断',
+                              'vod_play_url': '说明$diagplay'}]}
         pid = ids[0].split(':', 1)[1] if ':' in ids[0] else ids[0]
         html, host = self._http('/archives/%s/' % pid)
         if not html:
@@ -275,6 +306,8 @@ class Spider(BaseSpider):
 
     # ── 播放 ──────────────────────────────────────────────────
     def playerContent(self, flag, id, vipFlags):
+        if id == 'diagplay':
+            return {'parse': 0, 'url': '', 'header': {}}
         pid = id
         h265 = False
         if id.startswith('play@@'):
