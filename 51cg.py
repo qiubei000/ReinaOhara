@@ -24,7 +24,7 @@ class Spider(BaseSpider):
     HOSTS = ['https://51cg1.com', 'https://www.51cg61.cc', 'https://t0.51cg61.cc']
     UA = ('Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 '
           '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36')
-    TIMEOUT = 20
+    TIMEOUT = 8
 
     CATS = [
         ('home', '首页推荐', '/'),
